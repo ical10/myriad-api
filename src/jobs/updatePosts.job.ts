@@ -1,14 +1,12 @@
 import {CronJob, cronJob} from '@loopback/cron';
 import {repository} from '@loopback/repository';
-import {Keyring} from '@polkadot/api';
-import {polkadotApi} from '../helpers/polkadotApi';
-import {Post} from '../models';
 import {
-    PeopleRepository, 
-    PostRepository, 
-    TagRepository, 
-    UserCredentialRepository,
-    QueueRepository
+    PeopleRepository,
+    PostRepository,
+
+
+    QueueRepository, TagRepository,
+    UserCredentialRepository
 } from '../repositories';
 
 @cronJob()
@@ -25,73 +23,21 @@ export class UpdatePostsJob extends CronJob {
             onTick: async () => {
                 await this.performJob();
             },
-            cronTime: '*/1800 * * * * *',
+            cronTime: '0 0 */1 * * *', // Every hour
+            // cronTime: '*/10 * * * * *',
             start: true
         })
     }
 
     async performJob() {
         try {
-            await this.updateUserCredentialPosts()
-            await this.updatePeoplePost()
+            // await this.updatePeoplePost()
+            await this.updatePeopleCredentialPost()
         } catch (e) {
             console.log(e)
         }
     }
-
-    async updateUserCredentialPosts() {
-        try {
-            const userCredentials = await this.userCredentialRepository.find()
-            const api = await polkadotApi()
-            const keyring = new Keyring({type: 'sr25519', ss58Format: 214})
-
-            userCredentials.forEach(async userCredential => {
-                const peopleId = userCredential.peopleId
-                const posts: Post[] = await this.postRepository.find({where: {peopleId}})
-
-                posts.forEach(async (post: Post) => {
-                    if (post.walletAddress !== userCredential.userId) {
-                        try {
-                            let count: number = 0
-
-                            const foundQueue = await this.queueRepository.findOne({where: {id: post.walletAddress}})
-                            const from = keyring.addFromUri('//' + post.id)
-                            const to = userCredential.userId
-                            const {data: balance} = await api.query.system.account(from.address);
-                            const {nonce} = await api.query.system.account(to)
-
-                            if (!foundQueue) {
-                                count = nonce.toJSON()
-
-                                const queue = await this.queueRepository.create({
-                                    id: post.walletAddress,
-                                    count
-                                })
-
-                                await this.queueRepository.updateById(queue.id, {count: count + 1})
-                            } else {
-                                count = foundQueue.count
-
-                                await this.queueRepository.updateById(foundQueue.id, {count: count + 1})
-                            }
-
-                            const transfer = api.tx.balances.transfer(to, balance.free)
     
-                            await transfer.signAndSend(from, {nonce: count})
-    
-                            await this.postRepository.updateById(post.id, {
-                                ...post,
-                                walletAddress: userCredential.userId
-                            })
-                        } catch (err) {}
-                    }
-                })
-            })
-
-            // await api.disconnect()
-        } catch (err) { }
-    }
-
     async updatePeoplePost() {
         try {
             const posts = await this.postRepository.find()
@@ -102,25 +48,55 @@ export class UpdatePostsJob extends CronJob {
                 let foundPeople = null;
 
                 if (post.platformUser) {
-                    const platform_account_id = post.platformUser.platform_account_id;
-                    foundPeople = people.find(person => person.platform_account_id === platform_account_id)
+                    const {username, platform_account_id} = post.platformUser;
+
+                    if (post.platform === 'facebook') {     
+                        foundPeople = people.find(person => person.username === username)
+                    } else {
+                        foundPeople = people.find(person => person.platform_account_id === platform_account_id)
+                    }
                 }
 
                 if (foundPeople) {
-                    const userCredential = await this.userCredentialRepository.findOne({where: {peopleId: foundPeople.id}})
-
-                    if (userCredential) {
-                        await this.postRepository.updateById(post.id, {
-                            walletAddress: userCredential.userId,
-                            peopleId: foundPeople.id
-                        })
-                    }
-
-                    await this.postRepository.updateById(post.id, {
+                    this.postRepository.updateById(post.id, {
                         peopleId: foundPeople.id
                     })
                 }
             })
         } catch (err) { }
+    }
+
+    async updatePeopleCredentialPost () {
+        try {
+            const credential = await this.userCredentialRepository.find()
+
+            for (let i = 0; i < credential.length; i++) {
+                const foundPost = await this.postRepository.find({
+                    where: {
+                        peopleId: credential[i].peopleId,
+                        importBy: {
+                            nin: [[credential[i].userId]]
+                        }
+                    }
+                })
+
+                const updatedPost = foundPost.map(post => {
+                    post.importBy = [
+                        ...post.importBy,
+                        credential[i].userId
+                    ]
+
+                    return post
+                })
+
+                for (let j = 0; j < updatedPost.length; j++) {
+                    this.postRepository.updateById(updatedPost[j].id, {
+                        importBy: updatedPost[j].importBy
+                    })
+                }
+            }
+        } catch (err) {
+
+        }
     }
 }

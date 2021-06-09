@@ -17,9 +17,10 @@ import {
   HttpErrors
 } from '@loopback/rest';
 import {Keyring} from '@polkadot/api';
+import { KeypairType } from '@polkadot/util-crypto/types';
 import dotenv from 'dotenv';
 import {xml2json} from 'xml-js';
-import {People} from '../models';
+import {People, Post} from '../models';
 import {
   PeopleRepository, 
   PostRepository, 
@@ -69,7 +70,6 @@ export class PeopleController {
     })
     people: People
   ): Promise<People> {
-    let isFound = false
     let foundPeople = await this.peopleRepository.findOne({
       where: {
         or: [
@@ -81,19 +81,7 @@ export class PeopleController {
 
     if (!foundPeople) foundPeople = await this.peopleRepository.create(people)
 
-    switch (foundPeople.platform) {
-      case "twitter":
-        isFound = await this.createTwitterPostByPeople(foundPeople)
-        break
-
-      case "reddit":
-        isFound = await this.createRedditPostByPeople(foundPeople)
-        break
-
-      case "facebook":
-        isFound = await this.createFBPostByPeople(foundPeople)
-        break
-    }
+    const isFound = await this.createPostByPeople(foundPeople)
 
     if (!isFound) {
       await this.peopleRepository.deleteById(foundPeople.id)
@@ -122,36 +110,6 @@ export class PeopleController {
     return this.peopleRepository.find(filter);
   }
 
-  // @get('/people/count')
-  // @response(200, {
-  //   description: 'People model count',
-  //   content: {'application/json': {schema: CountSchema}},
-  // })
-  // async count(
-  //   @param.where(People) where?: Where<People>,
-  // ): Promise<Count> {
-  //   return this.peopleRepository.count(where);
-  // }
-
-  // @patch('/people')
-  // @response(200, {
-  //   description: 'People PATCH success count',
-  //   content: {'application/json': {schema: CountSchema}},
-  // })
-  // async updateAll(
-  //   @requestBody({
-  //     content: {
-  //       'application/json': {
-  //         schema: getModelSchemaRef(People, {partial: true}),
-  //       },
-  //     },
-  //   })
-  //   people: People,
-  //   @param.where(People) where?: Where<People>,
-  // ): Promise<Count> {
-  //   return this.peopleRepository.updateAll(people, where);
-  // }
-
   @get('/people/{id}')
   @response(200, {
     description: 'People model instance',
@@ -166,6 +124,25 @@ export class PeopleController {
     @param.filter(People, {exclude: 'where'}) filter?: FilterExcludingWhere<People>
   ): Promise<People> {
     return this.peopleRepository.findById(id, filter);
+  }
+
+  @get('/people/{id}/posts', {
+    responses: {
+      '200': {
+        description: 'Array of People has many Post',
+        content: {
+          'application/json': {
+            schema: { type: 'array', items: getModelSchemaRef(Post) },
+          },
+        },
+      },
+    },
+  })
+  async findPeoplePost(
+    @param.path.string('id') id: string,
+    @param.query.object('filter') filter?: Filter<Post>,
+  ): Promise<Post[]> {
+    return this.peopleRepository.posts(id).find(filter);
   }
 
   @patch('/people/{id}')
@@ -205,118 +182,36 @@ export class PeopleController {
     await this.peopleRepository.deleteById(id);
   }
 
-  async createTwitterPostByPeople(people: People): Promise<boolean> {
+  async createPostByPeople(people:People):Promise<boolean> {
     try {
-      const platform_account_id = people.platform_account_id
-      const maxResults = 5
-      const tweetField = "attachments,entities,referenced_tweets,created_at"
-
-      const {data: tweets} = await this.twitterService.getActions(`users/${platform_account_id}/tweets?max_results=${maxResults}&tweet.fields=${tweetField}`)
+      const posts = await this.socialMediaPost(people)
       
-      if (!tweets) return false 
-
-      const filterTweets = tweets.filter((post: any) => !post.referenced_tweets)
-      const keyring = new Keyring({type: 'sr25519', ss58Format: 214});
-
-      for (let i = 0; i < filterTweets.length; i++) {
-        const tweet = filterTweets[i]
-        const foundTweet = await this.postRepository.findOne({
-          where: {
-            textId: tweet.id, platform: "twitter"
-          }
-        })
-
-        if (foundTweet) continue
-
-        const userCredentials = await this.userCredentialRepository.findOne({
-          where: {
-            peopleId: people.id
-          }
-        })
-
-        const tags = tweet.entities ? (tweet.entities.hashtags ? 
-          tweet.entities.hashtags.map((hashtag: any) => hashtag.tag) : []
-        ) : []
-
-        const hasMedia = tweet.attachments ? Boolean(tweet.attachments.media_keys) : false
-        const newPost = {
-          tags,
-          hasMedia,
-          platform: 'twitter',
-          text: tweet.text,
-          textId: tweet.id,
-          link: `https://twitter.com/${platform_account_id}/status/${tweet.id}`,
-          peopleId: people.id,
-          platformUser: {
-            username: people.username,
-            platform_account_id: platform_account_id
-          },
-          platformCreatedAt: tweet.created_at
-        }
-
-        if (userCredentials) {
-          const result = await this.postRepository.create({
-            ...newPost,
-            walletAddress: userCredentials.userId
-          })
-
-          await this.publicMetricRepository.create({
-            liked: 0,
-            comment: 0,
-            postId: result.id
-          })
-        }
-
-        const result = await this.postRepository.create(newPost)
-        const newKey = keyring.addFromUri('//' + result.id)
-        await this.postRepository.updateById(result.id, {walletAddress: newKey.address})
-        await this.publicMetricRepository.create({
-          liked: 0,
-          comment: 0,
-          postId: result.id
-        })
-      }
-
-      return true
-    } catch (err) { }
-
-    return false
-  }
-
-  async createRedditPostByPeople(people: People): Promise<boolean> {
-    try {
-      const {data: user} = await this.redditService.getActions(`u/${people.username}.json?limit=5`)
-
-      const keyring = new Keyring({type: 'sr25519', ss58Format: 214});
-      const redditPost = await this.postRepository.find({where: {platform: 'reddit'}})
-      const filterPost = user.children.filter((post: any) => {
-        return !redditPost.find(e => post.data.id === e.textId) && post.kind === 't3'
-      })
-
-      for (let i = 0; i < filterPost.length; i++) {
-        const post = filterPost[i].data
+      for (let i = 0; i < posts.length; i++) {
+        const post = posts[i]
         const foundPost = await this.postRepository.findOne({
           where: {
-            textId: post.id
+            textId: people.platform === 'facebook' ? this.getFBTextId(post) : post.id
           }
         })
 
         if (foundPost) continue
 
-        const newPost = {
-          platformUser: {
-            username: people.username,
-            platform_account_id: people.platform_account_id,
-          },
-          tags: [],
-          platform: 'reddit',
-          title: post.title,
-          text: post.selftext,
-          textId: post.id,
-          peopleId: people.id,
-          hasMedia: post.media_metadata || post.is_reddit_media_domain ? true : false,
-          link: `https://reddit.com/${post.id}`,
-          platformCreatedAt: new Date(post.created_utc * 1000).toString()
+        const platformPost = await this.newPost(post, people)
+
+        let newPost = null
+
+        if (people.platform === "facebook") {
+          const textId = this.getFBTextId(post)
+
+          newPost = {
+            ...platformPost,
+            textId,
+            link: `https://facebook.com/${people.platform_account_id}/posts/${textId}`
+          }
+        } else {
+          newPost = {
+            ...platformPost
+          }
         }
 
         const userCredential = await this.userCredentialRepository.findOne({
@@ -326,94 +221,153 @@ export class PeopleController {
         })
 
         if (userCredential) {
-          const result  = await this.postRepository.create({
+          await this.createPostPublicMetric({
             ...newPost,
             walletAddress: userCredential.userId
-          })
-
-          await this.publicMetricRepository.create({
-            liked: 0,
-            comment: 0,
-            postId: result.id
-          })
+          }, true)
         }
 
-        const result = await this.postRepository.create(newPost)
-        const newKey = keyring.addFromUri('//' + result.id)
-
-        await this.postRepository.updateById(result.id, {walletAddress: newKey.address})
-        await this.publicMetricRepository.create({
-          liked: 0,
-          comment: 0,
-          postId: result.id
-        })
+        await this.createPostPublicMetric(newPost, false)
       }
+
       return true
-    } catch (err) { }
-    return false 
+    } catch (err) {
+      return false 
+    }
   }
 
-  // Retrieve facebook post page from RSS hub often error
-  async createFBPostByPeople(people: People): Promise<boolean> {
-    try {
-      const keyring = new Keyring({type: 'sr25519', ss58Format: 214});
-      const xml = await this.rsshubService.getContents(people.platform_account_id)
-      const resultJSON = await xml2json(xml, {compact: true, trim: true})
-      const response = JSON.parse(resultJSON)
+  async socialMediaPost(people:People) {
+    switch(people.platform) {
+      case "twitter":
+        const platform_account_id = people.platform_account_id
+        const maxResults = 5
+        const tweetField = "attachments,entities,referenced_tweets,created_at"
 
-      response.rss.channel.items.forEach(async (post: any) => {
-        const link = post.link._text.split("=")
-        const platform_account_id = link[2]
-        const textId = link[1].substr(0, link[1].length - 3)
+        const {data: tweets} = await this.twitterService.getActions(`users/${platform_account_id}/tweets?max_results=${maxResults}&tweet.fields=${tweetField}`)
+        
+        if (!tweets) throw new Error("People does not exists") 
 
-        const foundPost = await this.postRepository.findOne({
-          where: {
-            textId, platform: 'facebook'
-          }
+        const filterTweets = tweets.filter((post: any) => !post.referenced_tweets)
+
+        return filterTweets
+
+      case "reddit":
+        const {data: user} = await this.redditService.getActions(`u/${people.username}.json?limit=5`)
+        const redditPost = await this.postRepository.find({where: {platform: 'reddit'}})
+        const filterPost = user.children.filter((post: any) => {
+          return !redditPost.find(e => post.data.id === e.textId) && post.kind === 't3'
         })
 
-        if (!foundPost) {
-          const newPost = {
-            platformUser: {
-              username: people.username,
-              platform_account_id,
-            },
-            tags: [],
-            platform: 'facebook',
-            title: "",
-            text: "",
-            textId,
-            peopleId: people.id,
-            hasMedia: false,
-            link: `https://facebook.com/${platform_account_id}/posts/${textId}`,
-          }
+        return filterPost.map((post:any) => post.data)
 
-          const userCredential = await this.userCredentialRepository.findOne({where: {peopleId: people.id}})
+      case "facebook":
+        const xml = await this.rsshubService.getContents(people.platform_account_id)
+        const resultJSON = await xml2json(xml, {compact: true, trim: true})
+        const response = JSON.parse(resultJSON)
 
-          if (userCredential) {
-            const result = await this.postRepository.create({
-              ...newPost,
-              walletAddress: userCredential.userId
-            })
-            await this.publicMetricRepository.create({
-              liked: 0,
-              comment: 0,
-              postId: result.id
-            })
-          }
+        return response.rss.channel.item
 
-          const result = await this.postRepository.create(newPost)
-          const newKey = keyring.addFromUri('//' + result.id)
-          await this.postRepository.updateById(result.id, {walletAddress: newKey.address})
-          await this.publicMetricRepository.create({
-            liked: 0,
-            comment: 0,
-            postId: result.id
-          })
-        }
-      })
-      return true
-    } catch (err) { }
-    return false 
+      default:
+        throw new Error("Platform does not exists")
+    }
   }
+
+  async createPostPublicMetric(post:object, credential:boolean):Promise<void> {
+    const newPost = await this.postRepository.create(post)
+
+    await this.publicMetricRepository.create({
+      liked: 0,
+      disliked: 0,
+      comment: 0,
+      postId: newPost.id
+    })
+
+    if (!credential) {
+      const keyring = new Keyring({
+        type: process.env.POLKADOT_CRYPTO_TYPE as KeypairType, 
+        ss58Format: Number(process.env.POLKADOT_KEYRING_PREFIX)
+      });
+      const newKey = keyring.addFromUri('//' + newPost.id)
+      
+      await this.postRepository.updateById(newPost.id, {walletAddress: newKey.address});
+    }
+  }
+
+  async newPost(post:any, people:any) {    
+    const newPost = {
+      platformUser: {
+        username: people.username,
+        platform_account_id: people.platform_account_id,
+        profile_image_url: people.profile_image_url
+      },
+      platform: people.platform,
+      textId: post.id,
+      peopleId: people.id,
+      createdAt: new Date().toString()
+    }
+
+    switch (people.platform) {
+      case "twitter":
+        const tags = post.entities ? (post.entities.hashtags ? 
+          post.entities.hashtags.map((hashtag: any) => hashtag.tag) : []
+        ) : []
+
+        await this.createTags(tags)
+
+        return {
+          ...newPost,
+          text: post.text,
+          tags: tags, 
+          hasMedia: post.attachments ? Boolean(post.attachments.media_keys) : false, 
+          link: `https://twitter.com/${people.platform_account_id}/status/${post.id}`, 
+          platformCreatedAt: post.created_at
+        }
+
+      case "reddit":
+        return {
+          ...newPost,
+          tags: [], 
+          hasMedia: post.media_metadata || post.is_reddit_media_domain ? true : false, 
+          link: `https://reddit.com/${post.id}`, 
+          platformCreatedAt: new Date(post.created_utc * 1000).toString(),
+          title: post.title,
+          text: post.selftext
+        }
+      
+      case "facebook":
+        return {
+          ...newPost,
+          hasMedia: false,
+          tags: [],
+          platformCreatedAt: new Date().toString()
+        }
+
+      default:
+        throw new Error("Platform doesn't exists")
+    }
+  }
+
+  getFBTextId (post:any) {
+    const link = post.link._text.split("=")
+    return link[1].substr(0, link[1].length - 3)
+  }
+
+  async createTags(tags:string[]):Promise<void> {
+    const fetchTags = await this.tagRepository.find()
+    const filterTags = tags.filter((tag:string) => {
+      const foundTag = fetchTags.find((fetchTag:any) => fetchTag.id.toLowerCase() === tag.toLowerCase())
+
+      if (foundTag) return false
+      return true
+    })
+
+    if (filterTags.length === 0) return
+
+    await this.tagRepository.createAll(filterTags.map((filterTag:string) => {
+      return {
+        id: filterTag,
+        hide: false
+      }
+    }))
+ }
 }

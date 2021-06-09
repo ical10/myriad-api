@@ -1,14 +1,27 @@
 import {belongsTo, Entity, hasMany, model, property, hasOne} from '@loopback/repository';
 import {Comment} from './comment.model';
 import {People} from './people.model';
-import {Asset} from './asset.model';
 import {User} from './user.model';
 import {Like} from './like.model';
 import {PublicMetric} from './public-metric.model';
+import {Dislike} from './dislike.model';
 
 interface PlatformUser {
   username: string;
   platform_account_id: string;
+  profile_image_url?: string;
+}
+
+interface PlatformPublicMetric {
+  retweet_count?: number,
+  like_count?: number,
+  upvote_count?: number,
+  downvote_count?: number
+}
+
+interface TipsReceived {
+  tokenId: string,
+  totalTips: number
 }
 
 @model({
@@ -17,7 +30,7 @@ interface PlatformUser {
     mongodb: {
       collection: 'posts',
     },
-    hiddenProperties: ['wallet_address']
+    hiddenProperties: ['walletAddress','totalComment','totalLiked','totalDisliked']
   }
 })
 export class Post extends Entity {
@@ -51,6 +64,12 @@ export class Post extends Entity {
     default: 'myriad'
   })
   platform?: string
+
+  @property({
+    type: 'object',
+    required: false
+  })
+  platformPublicMetric?: PlatformPublicMetric 
 
   @property({
     type: 'string',
@@ -93,19 +112,35 @@ export class Post extends Entity {
   @property({
     type: 'date',
     required: false,
-    default: new Date().toString()
   })
   platformCreatedAt: string
 
   @property({
+    type: 'number',
+    required: false,
+    default: 0
+  })
+  totalComment?: number
+
+  @property({
+    type: 'number',
+    required: false,
+    default: 0
+  })
+  totalLiked?: number
+
+  @property({
+    type: 'number',
+    required: false,
+    default: 0
+  })
+  totalDisliked?: number
+
+  @property({
     type: 'date',
     required: false,
-    default: new Date()
   })
   createdAt?: string;
-
-  @belongsTo(() => User, {name: 'user'})
-  walletAddress: string;
 
   @property({
     type: 'date',
@@ -119,20 +154,44 @@ export class Post extends Entity {
   })
   deletedAt?: string;
 
+  @property({
+    type: 'array',
+    itemType: 'string',
+    required: false,
+    default: []
+  })
+  importBy: string[]
+
+  @property({
+    type: 'array',
+    itemType: 'object',
+    required: false,
+    default: [
+      {
+        tokenId: "MYR",
+        totalTips: 0
+      }
+    ]
+  })
+  tipsReceived: TipsReceived[]
+
+  @belongsTo(() => User, {name: 'user'})
+  walletAddress: string;
+
   @hasMany(() => Comment)
   comments: Comment[];
 
   @belongsTo(() => People)
   peopleId: string;
 
-  @hasOne(() => Asset)
-  asset: Asset;
-
   @hasMany(() => Like)
   likes: Like[];
 
   @hasOne(() => PublicMetric)
   publicMetric: PublicMetric;
+
+  @hasMany(() => Dislike)
+  dislikes: Dislike[];
 
   constructor(data?: Partial<Post>) {
     super(data);

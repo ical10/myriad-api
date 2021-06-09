@@ -5,12 +5,18 @@ import {SavedExperience} from './saved-experience.model';
 import {UserCredential} from './user-credential.model';
 import {Post} from './post.model';
 import {Like} from './like.model';
+import {Conversation} from './conversation.model';
+import {Friend} from './friend.model';
+import {DetailTransaction} from './detail-transaction.model';
+import {Token} from './token.model';
+import {UserToken} from './user-token.model';
 
 @model({
   settings: {
     mongodb: {
       collection: 'users',
     },
+    hiddenProperties: ['seed_example']
   }
 })
 export class User extends Entity {
@@ -20,24 +26,34 @@ export class User extends Entity {
     generated: false,
     required: true,
     jsonSchema: {
-      maxLength: 49,
-      minLength: 49,
+      maxLength: 66,
+      minLength: 66,
     },
   })
   id: string;
 
   @property({
     type: 'string',
-    required: true,
-    index: {
-      unique: true,
-    },
     jsonSchema: {
       maxLength: 30,
       minLength: 3,
     },
+    required: false
   })
-  name: string;
+  name?: string;
+
+  @property({
+    type: 'string',
+    required: true,
+    index: {
+      unique: true
+    },
+    jsonSchema: {
+      minLength: 6,
+      maxLength: 30
+    }
+  })
+  username: string
 
   @property({
     type: 'string',
@@ -57,12 +73,39 @@ export class User extends Entity {
     type: 'string',
     required: false
   })
-  bio?: string; 
+  bio?: string;
+
+  @property({
+    type: 'array',
+    itemType: 'string',
+    required: false,
+    default: []
+  })
+  fcm_token?: string[]
+
+  @property({
+    type: 'boolean',
+    required: false,
+    default: false,
+  })
+  skip_tour: boolean
+
+  @property({
+    type: 'string',
+    required: false,
+  })
+  seed_example?: string
+
+  @property({
+    type: 'array',
+    itemType: 'string',
+    required: false
+  })
+  fcmTokens?: string[]
 
   @property({
     type: 'date',
     required: false,
-    default: new Date()
   })
   createdAt?: string;
 
@@ -95,6 +138,24 @@ export class User extends Entity {
 
   @hasMany(() => Like)
   likes: Like[];
+
+  @hasMany(() => Conversation)
+  conversations: Conversation[];
+
+  @hasMany(() => User, {
+    through: {
+      model: () => Friend,
+      keyFrom: 'requestorId',
+      keyTo: 'friendId'
+    }
+  })
+  friends: User[];
+
+  @hasMany(() => DetailTransaction)
+  detailTransactions: DetailTransaction[];
+
+  @hasMany(() => Token, {through: {model: () => UserToken}})
+  tokens: Token[];
 
   constructor(data?: Partial<User>) {
     super(data);

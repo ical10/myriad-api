@@ -4,6 +4,7 @@ import {People} from './people.model';
 
 @model({
   settings: {
+    strictObjectIDCoercion: true,
     mongodb: {
       collection: 'userCredentials'
     }
@@ -22,15 +23,21 @@ export class UserCredential extends Entity {
 
   @property({
     type: 'string',
-    required: true,
+    required: false,
   })
-  access_token: string;
+  access_token?: string;
 
   @property({
     type: 'string',
     required: false,
   })
-  refresh_token: string
+  refresh_token?: string;
+
+  @property({
+    type: 'boolean',
+    required: true,
+  })
+  isLogin: boolean;
 
   @belongsTo(() => People)
   peopleId: string;

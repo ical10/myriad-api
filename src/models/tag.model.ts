@@ -2,6 +2,7 @@ import {Entity, model, property} from '@loopback/repository';
 
 @model({
   settings: {
+    strictObjectIDCoercion: true,
     mongodb: {
       collection: 'tags',
     },
@@ -27,17 +28,23 @@ export class Tag extends Entity {
   hide: boolean;
 
   @property({
-    type: 'date',
+    type: 'number',
     required: false,
-    default: new Date()
+    default: 1,
   })
-  createdAt?: string;
+  count: number;
 
   @property({
     type: 'date',
     required: false,
   })
-  updatedAt?: string;
+  createdAt: string;
+
+  @property({
+    type: 'date',
+    required: false,
+  })
+  updatedAt: string;
 
   @property({
     type: 'date',

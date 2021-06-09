@@ -2,14 +2,17 @@ import {inject} from '@loopback/core';
 import {cronJob, CronJob} from '@loopback/cron';
 import {repository} from '@loopback/repository';
 import {Keyring} from '@polkadot/api';
+import { KeypairType } from '@polkadot/util-crypto/types';
 import {
-  PeopleRepository, 
-  PostRepository, 
-  TagRepository, 
-  UserCredentialRepository,
-  PublicMetricRepository
+  PeopleRepository,
+  PostRepository,
+
+
+  PublicMetricRepository, TagRepository,
+  UserCredentialRepository
 } from '../repositories';
 import {Reddit} from '../services';
+import {u8aToHex} from '@polkadot/util'
 
 @cronJob()
 export class FetchContentRedditJob extends CronJob {
@@ -26,87 +29,26 @@ export class FetchContentRedditJob extends CronJob {
       onTick: async () => {
         await this.performJob();
       },
-      cronTime: '*/3600 * * * * *',
+      cronTime: '0 0 */1 * * *', // Every hour
+      // cronTime: '*/10 * * * * *',
       start: true
     })
   }
 
   async performJob() {
     try {
-      await this.searchPostByTag()
-      await this.searchPostByPeople()
+      this.searchPostByTag()
     } catch (e) {
       console.log(e)
     }
   }
-
-  async searchPostByPeople() {
-    try {
-      const people = await this.peopleRepository.find({where: {platform: "reddit"}})
-      const keyring = new Keyring({type: 'sr25519', ss58Format: 214});
-
-      for (let i = 0; i < people.length; i++) {
-        const person = people[i]
-        const {data: user} = await this.redditService.getActions(`u/${person.username}.json?limit=10`)
-
-        const posts = user.children.filter((post: any) => {
-          return post.kind === 't3'
-        })
-
-        for (let j = 0; j < posts.length; j++) {
-          const post = posts[j].data
-          const foundPost = await this.postRepository.findOne({where: {textId: post.id, platform: 'reddit'}})
-
-          if (foundPost) continue
-
-          const newPost = {
-            platformUser: {
-              username: post.author,
-              platform_account_id: post.author_fullname
-            },
-            tags: [],
-            platform: 'reddit',
-            peopleId: person.id,
-            title: post.title,
-            text: post.selftext,
-            textId: post.id,
-            hasMedia: post.media_metadata || post.is_reddit_media_domain ? true : false,
-            link: `https://wwww.reddit.com/${post.id}`,
-            platformCreatedAt: new Date(post.created_utc * 1000).toString()
-          }
-
-          const userCredential = await this.userCredentialRepository.findOne({where: {peopleId: person.id}})
-
-          if (userCredential) {
-            const result = await this.postRepository.create({
-              ...newPost,
-              walletAddress: userCredential.userId,
-            })
-            await this.publicMetricRepository.create({
-              liked: 0,
-              comment: 0,
-              postId: result.id
-            })
-          }
-
-          const result = await this.postRepository.create(newPost)
-          const newKey = keyring.addFromUri('//' + result.id)
-
-          await this.postRepository.updateById(result.id, {walletAddress: newKey.address})
-          await this.publicMetricRepository.create({
-            liked: 0,
-            comment: 0,
-            postId: result.id
-          })
-        }
-      }
-    } catch (err) { }
-  }
-
+  
   async searchPostByTag() {
     try {
       const tags = await this.tagRepository.find()
-      const keyring = new Keyring({type: 'sr25519', ss58Format: 214});
+      const keyring = new Keyring({
+        type: process.env.POLKADOT_CRYPTO_TYPE as KeypairType
+      });
 
       for (let i = 0; i < tags.length; i++) {
         const tag = tags[i]
@@ -120,18 +62,17 @@ export class FetchContentRedditJob extends CronJob {
 
         for (let j = 0; j < posts.length; j++) {
           const post = posts[j].data
+          const {data: userAbout} = await this.redditService.getActions(`u/${post.author}/about.json`)
+          const profile_image_url = userAbout.icon_img.split('?')[0]
           const foundPost = await this.postRepository.findOne({where: {textId: post.id}})
 
           if (foundPost) {
             const foundTag = foundPost.tags.find(postTag => postTag.toLowerCase() === tag.id.toLowerCase())
-            
-            if (!foundTag) {
-              const tags = foundPost.tags
-              tags.push(tag.id)
 
-              await this.postRepository.updateById(foundPost.id, {tags})
+            if (!foundTag) {
+              this.postRepository.updateById(foundPost.id, {tags: [...foundPost.tags, tag.id]})
             }
-            
+
             continue
           }
 
@@ -139,7 +80,8 @@ export class FetchContentRedditJob extends CronJob {
           const newPost = {
             platformUser: {
               username: post.author,
-              platform_account_id: post.author_fullname
+              platform_account_id: post.author_fullname,
+              profile_image_url
             },
             tags: [tag.id],
             platform: 'reddit',
@@ -147,8 +89,33 @@ export class FetchContentRedditJob extends CronJob {
             text: post.selftext,
             textId: post.id,
             hasMedia: post.media_metadata || post.is_reddit_media_domain ? true : false,
-            link: `https://wwww.reddit.com/${post.id}`,
-            platformCreatedAt: new Date(post.created_utc * 1000).toString()
+            link: `https://reddit.com/${post.id}`,
+            platformCreatedAt: new Date(post.created_utc * 1000).toString(),
+            createdAt: new Date().toString(),
+            assets: []
+          }
+
+          const assets:string[] = []
+
+          if (newPost.hasMedia) {
+
+            if (post.media_metadata) {
+              for (const img in post.media_metadata) {
+                assets.push(post.media_metadata[img].s.u.replace(/amp;/g, ''))
+              }
+            }
+            if (post.is_reddit_media_domain) {
+              const images = post.preview.images || []
+              const videos = post.preview.videos || []
+
+              for (let i = 0; i < images.length; i++) {
+                assets.push(images[i].source.url.replace(/amp;/g,''))
+              }
+
+              for (let i = 0; i < videos.length; i++) {
+                assets.push(videos[i].source.url.replace(/amp;/g,''))
+              }
+            }
           }
 
           if (foundPerson) {
@@ -157,35 +124,44 @@ export class FetchContentRedditJob extends CronJob {
             if (userCredential) {
               const result = await this.postRepository.create({
                 ...newPost,
+                assets,
                 peopleId: foundPerson.id,
-                walletAddress: userCredential.userId
+                walletAddress: userCredential.userId,
+                importBy: [userCredential.userId]
               })
-              await this.publicMetricRepository.create({
+              this.publicMetricRepository.create({
                 liked: 0,
+                disliked: 0,
                 comment: 0,
                 postId: result.id
               })
             }
             const result = await this.postRepository.create({
               ...newPost,
+              assets,
               peopleId: foundPerson.id
             })
             const newKey = keyring.addFromUri('//' + result.id)
 
-            await this.postRepository.updateById(result.id, {walletAddress: newKey.address})
-            await this.publicMetricRepository.create({
+            this.postRepository.updateById(result.id, {walletAddress: u8aToHex(newKey.publicKey)})
+            this.publicMetricRepository.create({
               liked: 0,
+              disliked: 0,
               comment: 0,
               postId: result.id
             })
           }
 
-          const result = await this.postRepository.create(newPost)
+          const result = await this.postRepository.create({
+            ...newPost,
+            assets
+          })
           const newKey = keyring.addFromUri('//' + result.id)
 
-          await this.postRepository.updateById(result.id, {walletAddress: newKey.address})
-          await this.publicMetricRepository.create({
+          this.postRepository.updateById(result.id, {walletAddress: u8aToHex(newKey.publicKey)})
+          this.publicMetricRepository.create({
             liked: 0,
+            disliked: 0,
             comment: 0,
             postId: result.id
           })

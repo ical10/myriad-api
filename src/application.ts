@@ -9,30 +9,44 @@ import {
 } from '@loopback/rest-explorer';
 import {ServiceMixin} from '@loopback/service-proxy';
 import {Keyring} from '@polkadot/api';
-import {mnemonicGenerate} from '@polkadot/util-crypto'
+import {mnemonicGenerate, encodeAddress} from '@polkadot/util-crypto';
+import {u8aToHex} from '@polkadot/util'
+import {KeypairType} from '@polkadot/util-crypto/types';
+import * as firebaseAdmin from 'firebase-admin';
 import path from 'path';
 import {
+  FetchContentRedditJob,
+  FetchContentSocialMediaJob,
+  FetchContentTwitterJob,
+  UpdatePostsJob,
+  RemovedContentJob
+} from './jobs';
+import {
+  CommentRepository,
+  ConversationRepository,
+  ExperienceRepository,
+  FriendRepository,
+  LikeRepository,
   PeopleRepository,
   PostRepository,
+  PublicMetricRepository,
+  SavedExperienceRepository,
   TagRepository,
   TransactionRepository,
-  UserRepository,
-  SavedExperienceRepository,
-  ExperienceRepository,
   UserCredentialRepository,
-  CommentRepository,
-  PublicMetricRepository
+  UserRepository,
+  TokenRepository,
+  DetailTransactionRepository,
+  UserTokenRepository,
+  QueueRepository
 } from './repositories';
 import people from './seed-data/people.json';
 import posts from './seed-data/posts.json';
-import tags from './seed-data/tags.json';
+import users from './seed-data/users.json';
+import tokens from './seed-data/tokens.json'
+import {polkadotApi} from './helpers/polkadotApi'
 import {MySequence} from './sequence';
-import {
-  FetchContentFacebookJob,
-  FetchContentRedditJob, 
-  FetchContentTwitterJob,
-  UpdatePostsJob
-} from './jobs'
+import {NotificationService} from './services';
 
 interface PlatformUser {
   username: string,
@@ -48,7 +62,8 @@ interface Post {
   hasMedia?: boolean,
   link?: string,
   createdAt?: string,
-  peopleId?: string
+  peopleId?: string,
+  platformCreatedAt?: string
 }
 
 export {ApplicationConfig};
@@ -73,10 +88,17 @@ export class MyriadApiApplication extends BootMixin(
 
     // Add cron component
     this.component(CronComponent);
-    this.add(createBindingFromClass(FetchContentFacebookJob))
-    this.add(createBindingFromClass(FetchContentTwitterJob))
-    this.add(createBindingFromClass(FetchContentRedditJob))
+    this.add(createBindingFromClass(FetchContentSocialMediaJob))
     this.add(createBindingFromClass(UpdatePostsJob))
+    this.add(createBindingFromClass(RemovedContentJob))
+
+
+    // Optional:
+    // this.add(createBindingFromClass(FetchContentTwitterJob))
+    // this.add(createBindingFromClass(FetchContentRedditJob))
+
+    // Add services
+    this.service(NotificationService)
 
     this.projectRoot = __dirname;
     // Customize @loopback/boot Booter Conventions here
@@ -88,6 +110,9 @@ export class MyriadApiApplication extends BootMixin(
         nested: true,
       },
     };
+
+    // initialize firebase app
+    firebaseAdmin.initializeApp()
   }
 
   async migrateSchema(options?: SchemaMigrationOptions) {
@@ -103,7 +128,16 @@ export class MyriadApiApplication extends BootMixin(
     const userCredRepo = await this.getRepository(UserCredentialRepository)
     const commentRepo = await this.getRepository(CommentRepository)
     const publicMetricRepo = await this.getRepository(PublicMetricRepository)
+    const likeRepository = await this.getRepository(LikeRepository)
+    const conversationRepository = await this.getRepository(ConversationRepository)
+    const friendRepository = await this.getRepository(FriendRepository)
+    const tokenRepository = await this.getRepository(TokenRepository)
+    const detailTransactionRepository = await this.getRepository(DetailTransactionRepository)
+    const userTokenRepository = await this.getRepository(UserTokenRepository)
+    const queueRepository = await this.getRepository(QueueRepository)
 
+    await likeRepository.deleteAll()
+    await conversationRepository.deleteAll()
     await tagRepo.deleteAll()
     await postsRepo.deleteAll()
     await peopleRepo.deleteAll()
@@ -114,50 +148,71 @@ export class MyriadApiApplication extends BootMixin(
     await userCredRepo.deleteAll()
     await commentRepo.deleteAll()
     await publicMetricRepo.deleteAll()
-    
-    const keyring = new Keyring({type: 'sr25519', ss58Format: 214});
-    const seed = mnemonicGenerate()
-    const pair = keyring.createFromUri(seed + '', {name: 'Myria'})
+    await friendRepository.deleteAll()
+    await tokenRepository.deleteAll()
+    await userTokenRepository.deleteAll()
+    await detailTransactionRepository.deleteAll()
+    await queueRepository.deleteAll()
 
-    const newTags = await tagRepo.createAll(tags)
+    const api = await polkadotApi(process.env.POLKADOT_MYRIAD_RPC || "")
+
+    const keyring = new Keyring({
+      type: process.env.POLKADOT_CRYPTO_TYPE as KeypairType
+    });
+
+    const updateUsers = users.map((user:any) => {
+      const seed = mnemonicGenerate()
+      const pair = keyring.createFromUri(seed + '', user)
+
+      return {
+        ...user,
+        id: u8aToHex(pair.publicKey),
+        seed_example: seed,
+        bio: `Hello, my name is ${user.name}`,
+        createdAt: new Date().toString(),
+        updatedAt: new Date().toString()
+      }
+    })
+
+    const newToken = await tokenRepository.createAll(tokens)
+
+    for (let i = 0; i < updateUsers.length; i++) {
+      const mnemonic = 'chalk cargo recipe ring loud deputy element hole moral soon lock credit';
+      const from = keyring.addFromMnemonic(mnemonic);
+      const value = 100000000000000;
+      const {nonce} = await api.query.system.account(encodeAddress(from.address, 214))
+
+      let count: number = nonce.toJSON()
+
+      const transfer = api.tx.balances.transfer(encodeAddress(updateUsers[i].id, 214), value)
+
+      const newUser = await userRepo.create(updateUsers[i])
+      const txHash = await transfer.signAndSend(from, {nonce: count + i});
+
+      await transactionRepo.create({
+        trxHash: txHash.toString(),
+        from: u8aToHex(from.publicKey),
+        to: updateUsers[i].id,
+        value: value,
+        state: 'success',
+        createdAt: new Date().toString(),
+        tokenId: 'MYR'
+      })
+
+      await userTokenRepository.create({
+        userId: newUser.id,
+        tokenId: "MYR"
+      })
+
+      await detailTransactionRepository.create({
+        sentToMe: 100000000000000,
+        sentToThem: 0,
+        userId: newUser.id,
+        tokenId: 'MYR'
+      })
+    }
+
     const newPeople = await peopleRepo.createAll(people)
-
-    const newUser = await userRepo.create({
-      id: pair.address,
-      name: "Myria",
-    })
-    
-    await userRepo.savedExperiences(newUser.id).create({
-      name: newUser.name + " Experience",
-      tags: [
-        {
-          id: 'cryptocurrency',
-          hide: false
-        },
-        {
-          id: 'blockchain',
-          hide: false
-        },
-        {
-          id: 'technology',
-          hide: false
-        }
-      ],
-      people: [
-        {
-          username: "gavofyork",
-          platform_account_id: "33962758",
-          hide: false
-        },
-        {
-          username: "CryptoChief",
-          platform_account_id: "t2_e0t5q",
-          hide: false
-        }
-      ],
-      description: `Hello, ${newUser.name}! Welcome to myriad!`,
-      userId: newUser.id
-    })
 
     for (let i = 0; i < newPeople.length; i++) {
       const person = newPeople[i]
@@ -169,6 +224,8 @@ export class MyriadApiApplication extends BootMixin(
         const post: Post = posts[j]
         const postAccountId = post.platformUser.platform_account_id
         const postAccountUsername = post.platformUser.username
+
+        post.createdAt = new Date().toString()
 
         if (personPlatform === 'twitter') {
           if (personAccountId === postAccountId) {
@@ -185,21 +242,118 @@ export class MyriadApiApplication extends BootMixin(
         if (personPlatform === 'facebook') {
           if (personUsername === postAccountUsername) {
             post.peopleId = person.id
+            post.platformCreatedAt = new Date().toString()
           }
         }
       }
     }
 
     for (let i = 0; i < posts.length; i++) {
+      const {tags} = posts[i]
       const post = await postsRepo.create(posts[i])
       const newKey = keyring.addFromUri('//' + post.id)
 
-      await postsRepo.updateById(post.id, {walletAddress: newKey.address})
+      await postsRepo.updateById(post.id, {
+        walletAddress: u8aToHex(newKey.publicKey),
+      })
+
       await publicMetricRepo.create({
         liked: 0,
         comment: 0,
+        disliked: 0,
         postId: post.id
       })
+
+      for (let j = 0; j < tags.length; j++) {
+        const foundTag = await tagRepo.findOne({
+          where: {
+            or: [
+              {
+                id: tags[j]
+              },
+              {
+                id: tags[j].toLowerCase()
+              },
+              {
+                id: tags[j].toUpperCase()
+              }
+            ],
+          }
+        })
+
+        if (!foundTag) {
+          await tagRepo.create({
+            id: tags[j],
+            count: 1,
+            createdAt: new Date().toString(),
+            updatedAt: new Date().toString()
+          })
+        } else {
+          const oneDay:number = 60 * 60 * 24 * 1000;
+          const isOneDay:boolean = new Date().getTime() - new Date(foundTag.updatedAt).getTime() > oneDay;
+
+          await tagRepo.updateById(foundTag.id, {
+            updatedAt: new Date().toString(),
+            count: isOneDay ? 1 : foundTag.count + 1
+          })
+        }
+      }
     }
+
+    // Unccomment till this
+
+    // users.forEach(async user => {
+    //   const seed = mnemonicGenerate()
+    //   const pair = keyring.createFromUri(seed + '', user)
+
+    //   await userRepo.create({
+    //     ...user,
+    //     id: pair.address,
+    //     bio: `Hello, my name is ${user.name}`,
+    //     createdAt: new Date().toString(),
+    //     updatedAt: new Date().toString()
+    //   })
+  
+      // await userRepo.savedExperiences(newUser.id).create({
+      //   name: newUser.name + " Experience",
+      //   tags: [
+      //     {
+      //       id: 'cryptocurrency',
+      //       hide: false
+      //     },
+      //     {
+      //       id: 'blockchain',
+      //       hide: false
+      //     },
+      //     {
+      //       id: 'technology',
+      //       hide: false
+      //     }
+      //   ],
+      //   people: [
+      //     {
+      //       username: "gavofyork",
+      //       platform_account_id: "33962758",
+      //       platform: "twitter",
+      //       profile_image_url: "https://pbs.twimg.com/profile_images/981390758870683656/RxA_8cyN_400x400.jpg",
+      //       hide: false
+      //     },
+      //     {
+      //       username: "CryptoChief",
+      //       platform_account_id: "t2_e0t5q",
+      //       platform: "reddit",
+      //       profile_image_url: "https://www.redditstatic.com/avatars/avatar_default_15_DB0064.png",
+      //       hide: false
+      //     }
+      //   ],
+      //   description: `Hello, ${newUser.name}! Welcome to myriad!`,
+      //   userId: newUser.id,
+      //   createdAt: new Date().toString(),
+      //   updatedAt: new Date().toString()
+      // })
+    // })
+
+    // await api.disconnect()
+
   }
 }

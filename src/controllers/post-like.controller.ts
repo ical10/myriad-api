@@ -19,12 +19,17 @@ import {
   Post,
   Like,
 } from '../models';
-import {LikeRepository, PostRepository} from '../repositories';
+import {
+  LikeRepository, 
+  PostRepository,
+  DislikeRepository
+} from '../repositories';
 
 export class PostLikeController {
   constructor(
     @repository(PostRepository) protected postRepository: PostRepository,
     @repository(LikeRepository) protected likeRepository: LikeRepository,
+    @repository(DislikeRepository) protected dislikeRepository: DislikeRepository
   ) { }
 
   @get('/posts/{id}/likes', {
@@ -68,7 +73,19 @@ export class PostLikeController {
       },
     }) like: Omit<Like, 'id'>,
   ): Promise<Like> {
-    let foundLike = await this.likeRepository.findOne({where: {postId: id, userId: like.userId}})
+    const foundLike = await this.likeRepository.findOne({
+      where: {
+        postId: id, 
+        userId: like.userId
+      }
+    })
+
+    const foundDislike = await this.dislikeRepository.findOne({
+      where: {
+        postId: id,
+        userId: like.userId
+      }
+    })
 
     if (!foundLike) {
       const newLike = await this.postRepository.likes(id).create({
@@ -76,14 +93,26 @@ export class PostLikeController {
         status: true
       });
 
-      await this.countLike(id)
+      if (foundDislike && foundDislike.status) {
+        await this.dislikeRepository.updateById(foundDislike.id, {status: false})
+      }
+
+      this.countLike(id)
       
       return newLike
     }
 
-    await this.likeRepository.updateById(foundLike.id, {status: !foundLike.status})
+    if (!foundLike.status) {
+      await this.likeRepository.updateById(foundLike.id, {status: true})
 
-    await this.countLike(id)
+      if (foundDislike && foundDislike.status) {
+        await this.dislikeRepository.updateById(foundDislike.id, {status: false})
+      }
+    } else {
+      await this.likeRepository.updateById(foundLike.id, {status: false})
+    }
+
+    this.countLike(id)
     
     foundLike.status = !foundLike.status
 
@@ -129,8 +158,24 @@ export class PostLikeController {
   }
 
   async countLike (postId:any):Promise<void> {
-    const likes = await this.likeRepository.find({where: {postId}})
+    const likes = await this.likeRepository.count({
+      postId,
+      status: true
+    })
+
+    const dislikes = await this.dislikeRepository.count({
+      postId,
+      status: true
+    })
     
-    await this.postRepository.publicMetric(postId).patch({liked: likes.filter(like => like.status).length})
+    this.postRepository.publicMetric(postId).patch({
+      liked: likes.count,
+      disliked: dislikes.count
+    })
+    
+    this.postRepository.updateById(postId, {
+      totalLiked: likes.count,
+      totalDisliked: dislikes.count
+    })
   }
 }

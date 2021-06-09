@@ -4,6 +4,7 @@ import {User} from './user.model';
 
 @model({
   settings: {
+    strictObjectIDCoercion: true,
     mongodb: {
       collection: "likes"
     }
