@@ -1,14 +1,16 @@
 import {Entity, hasMany, hasOne, model, property} from '@loopback/repository';
+import {PlatformType} from '../enums';
 import {Post} from './post.model';
-import {UserCredential} from './user-credential.model';
+import {UserSocialMedia} from './user-social-media.model';
 
 @model({
   settings: {
     strictObjectIDCoercion: true,
     mongodb: {
-      collection: 'people'
-    }
-  }
+      collection: 'people',
+    },
+    hiddenProperties: ['walletAddressPassword'],
+  },
 })
 export class People extends Entity {
   @property({
@@ -16,10 +18,16 @@ export class People extends Entity {
     id: true,
     generated: true,
     mongodb: {
-      dataType: 'ObjectId'
-    }
+      dataType: 'ObjectId',
+    },
   })
-  id?: string;
+  id: string;
+
+  @property({
+    type: 'string',
+    required: false,
+  })
+  name?: string;
 
   @property({
     type: 'string',
@@ -29,30 +37,52 @@ export class People extends Entity {
 
   @property({
     type: 'string',
-    required: false,
+    required: true,
+    jsonSchema: {
+      enum: Object.values(PlatformType),
+    },
   })
-  platform: string;
+  platform: PlatformType;
+
+  @property({
+    type: 'string',
+    required: true,
+  })
+  originUserId: string;
 
   @property({
     type: 'string',
     required: false,
   })
-  platform_account_id: string;
+  profilePictureURL: string;
+
+  @property({
+    type: 'date',
+    required: false,
+    default: () => new Date(),
+  })
+  createdAt?: string;
+
+  @property({
+    type: 'date',
+    required: false,
+    default: () => new Date(),
+  })
+  updatedAt?: string;
+
+  @property({
+    type: 'date',
+    required: false,
+  })
+  deletedAt?: string;
 
   @property({
     type: 'string',
-    required: false
   })
-  profile_image_url: string;
+  walletAddressPassword?: string;
 
-  @property({
-    type: 'boolean',
-    default: false
-  })
-  hide?: boolean
-
-  @hasOne(() => UserCredential)
-  userCredential: UserCredential;
+  @hasOne(() => UserSocialMedia)
+  userSocialMedia: UserSocialMedia;
 
   @hasMany(() => Post)
   posts: Post[];

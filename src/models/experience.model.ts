@@ -1,6 +1,13 @@
-import {belongsTo, Entity, hasMany, model, property} from '@loopback/repository';
-import {SavedExperience} from './saved-experience.model';
+import {
+  belongsTo,
+  Entity,
+  model,
+  property,
+  hasMany,
+} from '@loopback/repository';
+import {People} from './people.model';
 import {User} from './user.model';
+import {ExperienceUser} from './experience-user.model';
 
 @model({
   settings: {
@@ -8,7 +15,14 @@ import {User} from './user.model';
     mongodb: {
       collection: 'experiences',
     },
-  }
+    indexes: {
+      createdByIndex: {
+        keys: {
+          createdBy: 1,
+        },
+      },
+    },
+  },
 })
 export class Experience extends Entity {
   @property({
@@ -24,9 +38,6 @@ export class Experience extends Entity {
   @property({
     type: 'string',
     required: true,
-    index: {
-      unique: true,
-    },
     jsonSchema: {
       maxLength: 50,
       minLength: 1,
@@ -35,35 +46,52 @@ export class Experience extends Entity {
   name: string;
 
   @property({
-    type: "array",
-    itemType: "object",
-    required: false,
+    type: 'array',
+    itemType: 'string',
+    required: true,
   })
-  tags: object[]
+  tags: string[];
 
   @property({
-    type: "array",
-    itemType: "object",
-    required: false
+    type: 'array',
+    itemType: 'object',
+    required: false,
   })
-  people: object[]
+  people: People[];
 
   @property({
     type: 'string',
     required: false,
-    default: ''
+    jsonSchema: {
+      maxLength: 280,
+    },
   })
-  layout: string
+  description: string;
+
+  @property({
+    type: 'string',
+    required: false,
+    default: '',
+  })
+  experienceImageURL?: string;
+
+  @property({
+    type: 'number',
+    default: 0,
+  })
+  subscribedCount: number;
 
   @property({
     type: 'date',
     required: false,
+    default: () => new Date(),
   })
   createdAt?: string;
 
   @property({
     type: 'date',
     required: false,
+    default: () => new Date(),
   })
   updatedAt?: string;
 
@@ -73,23 +101,22 @@ export class Experience extends Entity {
   })
   deletedAt?: string;
 
-  @property({
-    type: 'boolean',
-    default: false
-  })
-  default?: boolean
+  @belongsTo(
+    () => User,
+    {name: 'user'},
+    {
+      jsonSchema: {
+        maxLength: 66,
+        minLength: 66,
+        pattern: '^0x',
+      },
+      required: true,
+    },
+  )
+  createdBy: string;
 
-  @property({
-    type: 'string',
-    required: false,
-  })
-  description: string
-
-  @belongsTo(() => User)
-  userId: string;
-
-  @hasMany(() => User, {through: {model: () => SavedExperience, keyFrom: 'experience_id', keyTo: 'user_id'}})
-  savedUsers: User[];
+  @hasMany(() => User, {through: {model: () => ExperienceUser}})
+  users: User[];
 
   constructor(data?: Partial<Experience>) {
     super(data);

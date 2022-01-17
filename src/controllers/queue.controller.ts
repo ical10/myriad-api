@@ -1,22 +1,21 @@
+import {Filter, repository} from '@loopback/repository';
 import {
-  Filter,
-  repository,
-} from '@loopback/repository';
-import {
-  param,
   get,
   getModelSchemaRef,
-  response,
+  param,
   patch,
   requestBody,
+  response,
 } from '@loopback/rest';
 import {Queue} from '../models';
 import {QueueRepository} from '../repositories';
+import {authenticate} from '@loopback/authentication';
 
+@authenticate('jwt')
 export class QueueController {
   constructor(
     @repository(QueueRepository)
-    public queueRepository : QueueRepository,
+    protected queueRepository: QueueRepository,
   ) {}
 
   @get('/queues')
@@ -31,15 +30,13 @@ export class QueueController {
       },
     },
   })
-  async find(
-    @param.filter(Queue) filter?: Filter<Queue>,
-  ): Promise<Queue[]> {
+  async find(@param.filter(Queue) filter?: Filter<Queue>): Promise<Queue[]> {
     return this.queueRepository.find(filter);
   }
 
   @patch('/queues/{id}')
   @response(200, {
-    description: 'Update'
+    description: 'Update',
   })
   async update(
     @param.path.string('id') id: string,
@@ -49,8 +46,9 @@ export class QueueController {
           schema: getModelSchemaRef(Queue, {partial: true}),
         },
       },
-    }) queue: Queue
-  ):Promise<void> {
-    this.queueRepository.updateById(id, queue)
+    })
+    queue: Queue,
+  ): Promise<void> {
+    return this.queueRepository.updateById(id, queue);
   }
 }

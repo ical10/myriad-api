@@ -1,77 +1,201 @@
-import {inject, Getter} from '@loopback/core';
-import {DefaultCrudRepository, repository, HasManyRepositoryFactory, HasManyThroughRepositoryFactory} from '@loopback/repository';
+import {Getter, inject, bind, BindingScope} from '@loopback/core';
+import {
+  DefaultCrudRepository,
+  HasManyRepositoryFactory,
+  HasManyThroughRepositoryFactory,
+  repository,
+  HasOneRepositoryFactory,
+  BelongsToAccessor,
+} from '@loopback/repository';
 import {MongoDataSource} from '../datasources';
-import {User, UserRelations, Experience, Comment, SavedExperience, UserCredential, Post, Like, Conversation, Friend, DetailTransaction, Token, UserToken} from '../models';
+import {
+  ActivityLog,
+  Currency,
+  Experience,
+  Friend,
+  User,
+  UserCurrency,
+  UserExperience,
+  UserRelations,
+  AccountSetting,
+  NotificationSetting,
+  People,
+  UserSocialMedia,
+  LeaderBoard,
+} from '../models';
+import {ActivityLogRepository} from './activity-log.repository';
+import {CurrencyRepository} from './currency.repository';
 import {ExperienceRepository} from './experience.repository';
-import {CommentRepository} from './comment.repository';
-import {SavedExperienceRepository} from './saved-experience.repository';
-import {UserCredentialRepository} from './user-credential.repository';
-import {PostRepository} from './post.repository';
-import {LikeRepository} from './like.repository';
-import {ConversationRepository} from './conversation.repository';
 import {FriendRepository} from './friend.repository';
-import {DetailTransactionRepository} from './detail-transaction.repository';
-import {UserTokenRepository} from './user-token.repository';
-import {TokenRepository} from './token.repository';
+import {UserCurrencyRepository} from './user-currency.repository';
+import {UserExperienceRepository} from './user-experience.repository';
+import {UserSocialMediaRepository} from './user-social-media.repository';
+import {AccountSettingRepository} from './account-setting.repository';
+import {NotificationSettingRepository} from './notification-setting.repository';
+import {PeopleRepository} from './people.repository';
+import {LeaderBoardRepository} from './leader-board.repository';
 
+@bind({scope: BindingScope.SINGLETON})
 export class UserRepository extends DefaultCrudRepository<
   User,
   typeof User.prototype.id,
   UserRelations
 > {
+  public readonly friends: HasManyRepositoryFactory<
+    Friend,
+    typeof User.prototype.id
+  >;
 
-  public readonly experiences: HasManyRepositoryFactory<Experience, typeof User.prototype.id>;
+  public readonly activityLogs: HasManyRepositoryFactory<
+    ActivityLog,
+    typeof User.prototype.id
+  >;
 
-  public readonly comments: HasManyRepositoryFactory<Comment, typeof User.prototype.id>;
+  public readonly experiences: HasManyThroughRepositoryFactory<
+    Experience,
+    typeof Experience.prototype.id,
+    UserExperience,
+    typeof User.prototype.id
+  >;
 
-  public readonly savedExperiences: HasManyThroughRepositoryFactory<Experience, typeof Experience.prototype.id,
-          SavedExperience,
-          typeof User.prototype.id
-        >;
+  public readonly currencies: HasManyThroughRepositoryFactory<
+    Currency,
+    typeof Currency.prototype.id,
+    UserCurrency,
+    typeof User.prototype.id
+  >;
 
-  public readonly userCredentials: HasManyRepositoryFactory<UserCredential, typeof User.prototype.id>;
+  public readonly accountSetting: HasOneRepositoryFactory<
+    AccountSetting,
+    typeof User.prototype.id
+  >;
 
-  public readonly posts: HasManyRepositoryFactory<Post, typeof User.prototype.id>;
+  public readonly notificationSetting: HasOneRepositoryFactory<
+    NotificationSetting,
+    typeof User.prototype.id
+  >;
 
-  public readonly likes: HasManyRepositoryFactory<Like, typeof User.prototype.id>;
+  public readonly people: HasManyThroughRepositoryFactory<
+    People,
+    typeof People.prototype.id,
+    UserSocialMedia,
+    typeof User.prototype.id
+  >;
 
-  public readonly conversations: HasManyRepositoryFactory<Conversation, typeof User.prototype.id>;
+  public readonly leaderboard: HasOneRepositoryFactory<
+    LeaderBoard,
+    typeof User.prototype.id
+  >;
 
-  public readonly friends: HasManyThroughRepositoryFactory<User, typeof User.prototype.id,
-          Friend,
-          typeof User.prototype.id
-        >;
+  public readonly currency: BelongsToAccessor<
+    Currency,
+    typeof User.prototype.id
+  >;
 
-  public readonly detailTransactions: HasManyRepositoryFactory<DetailTransaction, typeof User.prototype.id>;
-
-  public readonly tokens: HasManyThroughRepositoryFactory<Token, typeof Token.prototype.id,
-          UserToken,
-          typeof User.prototype.id
-        >;
+  public readonly experience: BelongsToAccessor<
+    Experience,
+    typeof User.prototype.id
+  >;
 
   constructor(
-    @inject('datasources.mongo') dataSource: MongoDataSource, @repository.getter('ExperienceRepository') protected experienceRepositoryGetter: Getter<ExperienceRepository>, @repository.getter('CommentRepository') protected commentRepositoryGetter: Getter<CommentRepository>, @repository.getter('SavedExperienceRepository') protected savedExperienceRepositoryGetter: Getter<SavedExperienceRepository>, @repository.getter('UserCredentialRepository') protected userCredentialRepositoryGetter: Getter<UserCredentialRepository>, @repository.getter('PostRepository') protected postRepositoryGetter: Getter<PostRepository>, @repository.getter('LikeRepository') protected likeRepositoryGetter: Getter<LikeRepository>, @repository.getter('ConversationRepository') protected conversationRepositoryGetter: Getter<ConversationRepository>, @repository.getter('FriendRepository') protected friendRepositoryGetter: Getter<FriendRepository>, @repository.getter('UserRepository') protected userRepositoryGetter: Getter<UserRepository>, @repository.getter('DetailTransactionRepository') protected detailTransactionRepositoryGetter: Getter<DetailTransactionRepository>, @repository.getter('UserTokenRepository') protected userTokenRepositoryGetter: Getter<UserTokenRepository>, @repository.getter('TokenRepository') protected tokenRepositoryGetter: Getter<TokenRepository>,
+    @inject('datasources.mongo') dataSource: MongoDataSource,
+    @repository.getter('UserSocialMediaRepository')
+    protected userSocialMediaRepositoryGetter: Getter<UserSocialMediaRepository>,
+    @repository.getter('UserCurrencyRepository')
+    protected userCurrencyRepositoryGetter: Getter<UserCurrencyRepository>,
+    @repository.getter('CurrencyRepository')
+    protected currencyRepositoryGetter: Getter<CurrencyRepository>,
+    @repository.getter('FriendRepository')
+    protected friendRepositoryGetter: Getter<FriendRepository>,
+    @repository.getter('ExperienceRepository')
+    protected experienceRepositoryGetter: Getter<ExperienceRepository>,
+    @repository.getter('UserExperienceRepository')
+    protected userExperienceRepositoryGetter: Getter<UserExperienceRepository>,
+    @repository.getter('ActivityLogRepository')
+    protected activityLogRepositoryGetter: Getter<ActivityLogRepository>,
+    @repository.getter('AccountSettingRepository')
+    protected accountSettingRepositoryGetter: Getter<AccountSettingRepository>,
+    @repository.getter('NotificationSettingRepository')
+    protected notificationSettingRepositoryGetter: Getter<NotificationSettingRepository>,
+    @repository.getter('PeopleRepository')
+    protected peopleRepositoryGetter: Getter<PeopleRepository>,
+    @repository.getter('LeaderBoardRepository')
+    protected leaderBoardRepositoryGetter: Getter<LeaderBoardRepository>,
   ) {
     super(User, dataSource);
-    this.tokens = this.createHasManyThroughRepositoryFactoryFor('tokens', tokenRepositoryGetter, userTokenRepositoryGetter,);
-    this.registerInclusionResolver('tokens', this.tokens.inclusionResolver);
-    this.detailTransactions = this.createHasManyRepositoryFactoryFor('detailTransactions', detailTransactionRepositoryGetter,);
-    this.registerInclusionResolver('detailTransactions', this.detailTransactions.inclusionResolver);
-    this.friends = this.createHasManyThroughRepositoryFactoryFor('friends', Getter.fromValue(this), friendRepositoryGetter,);
+    this.experience = this.createBelongsToAccessorFor(
+      'experience',
+      experienceRepositoryGetter,
+    );
+    this.registerInclusionResolver(
+      'experience',
+      this.experience.inclusionResolver,
+    );
+    this.currency = this.createBelongsToAccessorFor(
+      'currency',
+      currencyRepositoryGetter,
+    );
+    this.registerInclusionResolver('currency', this.currency.inclusionResolver);
+    this.leaderboard = this.createHasOneRepositoryFactoryFor(
+      'leaderboard',
+      leaderBoardRepositoryGetter,
+    );
+    this.registerInclusionResolver(
+      'leaderboard',
+      this.leaderboard.inclusionResolver,
+    );
+    this.people = this.createHasManyThroughRepositoryFactoryFor(
+      'people',
+      peopleRepositoryGetter,
+      userSocialMediaRepositoryGetter,
+    );
+    this.registerInclusionResolver('people', this.people.inclusionResolver);
+    this.notificationSetting = this.createHasOneRepositoryFactoryFor(
+      'notificationSetting',
+      notificationSettingRepositoryGetter,
+    );
+    this.registerInclusionResolver(
+      'notificationSetting',
+      this.notificationSetting.inclusionResolver,
+    );
+    this.accountSetting = this.createHasOneRepositoryFactoryFor(
+      'accountSetting',
+      accountSettingRepositoryGetter,
+    );
+    this.registerInclusionResolver(
+      'accountSetting',
+      this.accountSetting.inclusionResolver,
+    );
+    this.friends = this.createHasManyRepositoryFactoryFor(
+      'friends',
+      friendRepositoryGetter,
+    );
     this.registerInclusionResolver('friends', this.friends.inclusionResolver);
-    this.conversations = this.createHasManyRepositoryFactoryFor('conversations', conversationRepositoryGetter,);
-    this.registerInclusionResolver('conversations', this.conversations.inclusionResolver);
-    this.likes = this.createHasManyRepositoryFactoryFor('likes', likeRepositoryGetter,);
-    this.registerInclusionResolver('likes', this.likes.inclusionResolver);
-    this.posts = this.createHasManyRepositoryFactoryFor('posts', postRepositoryGetter,);
-    this.registerInclusionResolver('posts', this.posts.inclusionResolver);
-    this.userCredentials = this.createHasManyRepositoryFactoryFor('userCredentials', userCredentialRepositoryGetter,);
-    this.registerInclusionResolver('userCredentials', this.userCredentials.inclusionResolver);
-    this.savedExperiences = this.createHasManyThroughRepositoryFactoryFor('savedExperiences', experienceRepositoryGetter, savedExperienceRepositoryGetter,);
-    this.registerInclusionResolver('savedExperiences', this.savedExperiences.inclusionResolver);
-    this.comments = this.createHasManyRepositoryFactoryFor('comments', commentRepositoryGetter,);
-    this.registerInclusionResolver('comments', this.comments.inclusionResolver);
-    this.experiences = this.createHasManyRepositoryFactoryFor('experiences', experienceRepositoryGetter,);
-    this.registerInclusionResolver('experiences', this.experiences.inclusionResolver);
+    this.activityLogs = this.createHasManyRepositoryFactoryFor(
+      'activityLogs',
+      activityLogRepositoryGetter,
+    );
+    this.registerInclusionResolver(
+      'activityLogs',
+      this.activityLogs.inclusionResolver,
+    );
+    this.experiences = this.createHasManyThroughRepositoryFactoryFor(
+      'experiences',
+      experienceRepositoryGetter,
+      userExperienceRepositoryGetter,
+    );
+    this.registerInclusionResolver(
+      'experiences',
+      this.experiences.inclusionResolver,
+    );
+    this.currencies = this.createHasManyThroughRepositoryFactoryFor(
+      'currencies',
+      currencyRepositoryGetter,
+      userCurrencyRepositoryGetter,
+    );
+    this.registerInclusionResolver(
+      'currencies',
+      this.currencies.inclusionResolver,
+    );
   }
 }

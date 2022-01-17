@@ -8,7 +8,19 @@ import {User} from './user.model';
     mongodb: {
       collection: 'notifications',
     },
-  }
+    indexes: {
+      fromIndex: {
+        keys: {
+          from: 1,
+        },
+      },
+      toIndex: {
+        keys: {
+          to: 1,
+        },
+      },
+    },
+  },
 })
 export class Notification extends Entity {
   @property({
@@ -30,11 +42,17 @@ export class Notification extends Entity {
   })
   type: NotificationType;
 
-  @belongsTo(() => User, {name: 'fromUserId'})
-  from: string;
+  @property({
+    type: 'boolean',
+    default: false,
+  })
+  read: boolean;
 
-  @belongsTo(() => User, {name: 'toUserId'})
-  to: string;
+  @property({
+    type: 'string',
+    required: false,
+  })
+  referenceId?: string;
 
   @property({
     type: 'string',
@@ -43,14 +61,24 @@ export class Notification extends Entity {
   message: string;
 
   @property({
+    type: 'array',
+    itemType: 'object',
+    required: false,
+    default: [],
+  })
+  additionalReferenceId: object[];
+
+  @property({
     type: 'date',
     required: false,
+    default: () => new Date(),
   })
   createdAt?: string;
 
   @property({
     type: 'date',
     required: false,
+    default: () => new Date(),
   })
   updatedAt?: string;
 
@@ -59,6 +87,33 @@ export class Notification extends Entity {
     required: false,
   })
   deletedAt?: string;
+
+  @belongsTo(
+    () => User,
+    {name: 'fromUserId'},
+    {
+      jsonSchema: {
+        maxLength: 66,
+        minLength: 66,
+        pattern: '^0x',
+      },
+    },
+  )
+  from: string;
+
+  @belongsTo(
+    () => User,
+    {name: 'toUserId'},
+    {
+      jsonSchema: {
+        maxLength: 66,
+        minLength: 66,
+        pattern: '^0x',
+      },
+      required: true,
+    },
+  )
+  to: string;
 
   constructor(data?: Partial<Notification>) {
     super(data);

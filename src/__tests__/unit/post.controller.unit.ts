@@ -1,0 +1,121 @@
+import {
+  createStubInstance,
+  expect,
+  sinon,
+  StubbedInstanceWithSinonAccessor,
+  toJSON,
+} from '@loopback/testlab';
+import {PostController} from '../../controllers';
+import {PlatformType} from '../../enums';
+import {Post} from '../../models';
+import {
+  CommentRepository,
+  DraftPostRepository,
+  FriendRepository,
+  PeopleRepository,
+  PostRepository,
+  VoteRepository,
+} from '../../repositories';
+import {MetricService, PostService, SocialMediaService} from '../../services';
+import {givenMyriadPost} from '../helpers';
+
+describe('PostController', () => {
+  let postRepository: StubbedInstanceWithSinonAccessor<PostRepository>;
+  let draftPostRepository: StubbedInstanceWithSinonAccessor<DraftPostRepository>;
+  let commentRepository: StubbedInstanceWithSinonAccessor<CommentRepository>;
+  let peopleRepository: StubbedInstanceWithSinonAccessor<PeopleRepository>;
+  let friendRepository: StubbedInstanceWithSinonAccessor<FriendRepository>;
+  let voteRepository: StubbedInstanceWithSinonAccessor<VoteRepository>;
+  let postService: PostService;
+  let socialMediaService: SocialMediaService;
+  let metricService: MetricService;
+  let controller: PostController;
+  let aPostWithId: Post;
+  let aChangedPost: Post;
+  let aListOfPosts: Post[];
+
+  beforeEach(resetRepositories);
+
+  describe('findPostById', () => {
+    it('returns a post if it exists', async () => {
+      const findById = postRepository.stubs.findById;
+      findById.resolves(aPostWithId);
+      expect(await controller.findById(aPostWithId.id as string)).to.eql(
+        aPostWithId,
+      );
+      sinon.assert.calledWith(findById, aPostWithId.id);
+    });
+  });
+
+  describe('findPosts', () => {
+    it('returns multiple posts if they exist', async () => {
+      const find = postRepository.stubs.find;
+      find.resolves(aListOfPosts);
+      expect(await controller.getTimeline()).to.eql(aListOfPosts);
+      sinon.assert.called(find);
+    });
+
+    it('returns empty list if no posts exist', async () => {
+      const find = postRepository.stubs.find;
+      const expected: Post[] = [];
+      find.resolves(expected);
+      expect(await controller.getTimeline()).to.eql(expected);
+      sinon.assert.called(find);
+    });
+
+    it('uses the provided filter', async () => {
+      const find = postRepository.stubs.find;
+      const filter = toJSON({where: {text: 'hello world'}});
+
+      find.resolves(aListOfPosts);
+      await controller.getTimeline(filter);
+      sinon.assert.calledWith(find, filter);
+    });
+  });
+
+  describe('updatePost', () => {
+    it('successfully updates existing items', async () => {
+      const updateById = postRepository.stubs.updateById;
+      updateById.resolves();
+      await controller.updateById(aPostWithId.id as string, aChangedPost);
+      sinon.assert.calledWith(updateById, aPostWithId.id, aChangedPost);
+    });
+  });
+
+  function resetRepositories() {
+    postRepository = createStubInstance(PostRepository);
+    draftPostRepository = createStubInstance(DraftPostRepository);
+    commentRepository = createStubInstance(CommentRepository);
+    peopleRepository = createStubInstance(PeopleRepository);
+    voteRepository = createStubInstance(VoteRepository);
+    aPostWithId = givenMyriadPost({
+      id: '1',
+    });
+    aListOfPosts = [
+      aPostWithId,
+      givenMyriadPost({
+        id: '2',
+        text: 'wow',
+        platform: PlatformType.MYRIAD,
+        tags: ['wow'],
+        createdBy:
+          '0x06cc7ed22ebd12ccc28fb9c0d14a5c4420a331d89a5fef48b915e8449ee61863',
+      }),
+    ] as Post[];
+    aChangedPost = givenMyriadPost({
+      id: aPostWithId.id,
+      text: 'woah',
+    });
+
+    postService = new PostService(
+      postRepository,
+      draftPostRepository,
+      peopleRepository,
+      commentRepository,
+      friendRepository,
+      voteRepository,
+      metricService,
+    );
+    controller = new PostController(socialMediaService, postService);
+  }
+});

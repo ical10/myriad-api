@@ -1,96 +1,146 @@
+import {intercept} from '@loopback/core';
 import {
   Count,
   CountSchema,
   Filter,
+  FilterExcludingWhere,
   repository,
-  Where
 } from '@loopback/repository';
 import {
   del,
   get,
   getModelSchemaRef,
-  getWhereSchemaFor,
-  HttpErrors,
   param,
   patch,
   post,
-  requestBody
+  requestBody,
+  response,
 } from '@loopback/rest';
+import {ExperienceInterceptor, PaginationInterceptor} from '../interceptors';
+import {Experience, UserExperience} from '../models';
 import {
-  Experience, User
-} from '../models';
-import {UserRepository} from '../repositories';
+  ExperienceRepository,
+  UserExperienceRepository,
+  UserRepository,
+} from '../repositories';
+import {authenticate} from '@loopback/authentication';
 
+@authenticate('jwt')
 export class UserExperienceController {
   constructor(
-    @repository(UserRepository) protected userRepository: UserRepository,
-  ) { }
+    @repository(UserRepository)
+    protected userRepository: UserRepository,
+    @repository(UserExperienceRepository)
+    protected userExperienceRepository: UserExperienceRepository,
+    @repository(ExperienceRepository)
+    protected experienceRepository: ExperienceRepository,
+  ) {}
 
-  @get('/users/{id}/experiences', {
+  @intercept(PaginationInterceptor.BINDING_KEY)
+  @get('/user-experiences', {
     responses: {
       '200': {
-        description: 'Array of User has many Experience through SavedExperience',
+        description: 'Array of UserExperience model instances',
         content: {
           'application/json': {
-            schema: {type: 'array', items: getModelSchemaRef(Experience)},
+            schema: {
+              type: 'array',
+              items: getModelSchemaRef(UserExperience, {
+                includeRelations: true,
+              }),
+            },
           },
         },
       },
     },
   })
   async find(
-    @param.path.string('id') id: string,
-    @param.query.object('filter') filter?: Filter<Experience>,
-  ): Promise<Experience[]> {
-    return this.userRepository.savedExperiences(id).find(filter);
+    @param.filter(UserExperience, {exclude: ['limit', 'skip', 'offset']})
+    filter?: Filter<UserExperience>,
+  ): Promise<UserExperience[]> {
+    return this.userExperienceRepository.find(filter);
   }
 
+  @get('/user-experiences/{id}')
+  @response(200, {
+    description: 'UserExperience model instance',
+    content: {
+      'application/json': {
+        schema: getModelSchemaRef(UserExperience, {includeRelations: true}),
+      },
+    },
+  })
+  async findById(
+    @param.path.string('id') id: string,
+    @param.filter(UserExperience, {exclude: 'where'})
+    filter?: FilterExcludingWhere<UserExperience>,
+  ): Promise<UserExperience> {
+    return this.userExperienceRepository.findById(id, filter);
+  }
+
+  @intercept(ExperienceInterceptor.BINDING_KEY)
+  @post('/users/{userId}/subscribe/{experienceId}', {
+    responses: {
+      '200': {
+        description: 'subscribe an Experience model instance',
+        content: {
+          'application/json': {schema: getModelSchemaRef(UserExperience)},
+        },
+      },
+    },
+  })
+  async subscribe(
+    @param.path.string('userId') userId: string,
+    @param.path.string('experienceId') experienceId: string,
+  ): Promise<UserExperience> {
+    return this.userExperienceRepository.create(
+      Object.assign(new UserExperience(), {
+        userId,
+        experienceId,
+        subscribed: true,
+      }),
+    );
+  }
+
+  // Create new experience
+  @intercept(ExperienceInterceptor.BINDING_KEY)
   @post('/users/{id}/experiences', {
     responses: {
       '200': {
-        description: 'create a Experience model instance',
+        description: 'create an Experience model instance',
         content: {'application/json': {schema: getModelSchemaRef(Experience)}},
       },
     },
   })
   async create(
-    @param.path.string('id') id: typeof User.prototype.id,
+    @param.path.string('id') id: string,
     @requestBody({
       content: {
         'application/json': {
           schema: getModelSchemaRef(Experience, {
             title: 'NewExperienceInUser',
-            exclude: ['id'],
+            optional: ['createdBy'],
           }),
         },
       },
-    }) experience: Omit<Experience, 'id'>,
+    })
+    experience: Omit<Experience, 'id'>,
   ): Promise<Experience> {
-    try {
-      const newExperience = await this.userRepository.savedExperiences(id).create({
-        ...experience,
-        userId: id,
-        createdAt: new Date().toString(),
-        updatedAt: new Date().toString()
-      });
-
-      return newExperience
-
-    } catch (err) {
-      throw new HttpErrors.UnprocessableEntity("Experience already exists")
-    }
+    return this.userRepository.experiences(id).create(experience);
   }
 
-  @patch('/users/{id}/experiences', {
+  @intercept(ExperienceInterceptor.BINDING_KEY)
+  @patch('/users/{userId}/experiences/{experienceId}', {
     responses: {
-      '200': {
-        description: 'User.Experience PATCH success count',
+      '204': {
+        description: 'Experience model count',
         content: {'application/json': {schema: CountSchema}},
       },
     },
   })
-  async patch(
-    @param.path.string('id') id: string,
+  async updateExperience(
+    @param.path.string('userId') userId: string,
+    @param.path.string('experienceId') experienceId: string,
     @requestBody({
       content: {
         'application/json': {
@@ -99,26 +149,21 @@ export class UserExperienceController {
       },
     })
     experience: Partial<Experience>,
-    @param.query.object('where', getWhereSchemaFor(Experience)) where?: Where<Experience>,
   ): Promise<Count> {
-    return this.userRepository.savedExperiences(id).patch({
-      ...experience,
-      updatedAt: new Date().toString()
-    }, where);
+    return this.userRepository
+      .experiences(userId)
+      .patch(experience, {id: experienceId});
   }
 
-  @del('/users/{id}/experiences', {
+  @intercept(ExperienceInterceptor.BINDING_KEY)
+  @del('/user-experiences/{id}', {
     responses: {
       '200': {
         description: 'User.Experience DELETE success count',
-        content: {'application/json': {schema: CountSchema}},
       },
     },
   })
-  async delete(
-    @param.path.string('id') id: string,
-    @param.query.object('where', getWhereSchemaFor(Experience)) where?: Where<Experience>,
-  ): Promise<Count> {
-    return this.userRepository.savedExperiences(id).delete(where);
+  async deleteById(@param.path.string('id') id: string): Promise<void> {
+    return this.userExperienceRepository.deleteById(id);
   }
 }

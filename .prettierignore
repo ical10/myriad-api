@@ -1,2 +1,4 @@
-dist
-*.json
+.maintain/kubernetes
+dist/
+node_modules/
+*.tsbuildinfo

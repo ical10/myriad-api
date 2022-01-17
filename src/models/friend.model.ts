@@ -1,13 +1,42 @@
-import {Entity, model, property, belongsTo} from '@loopback/repository';
-import {User} from './user.model';
+import {belongsTo, Entity, model, property} from '@loopback/repository';
+import {FriendStatusType} from '../enums';
+import {User, UserWithRelations} from './user.model';
 
 @model({
   settings: {
     strictObjectIDCoercion: true,
     mongodb: {
-      collection: 'friends'
-    }
-  }
+      collection: 'friends',
+    },
+    indexes: {
+      requesteeIdIndex: {
+        keys: {
+          requesteeId: 1,
+        },
+      },
+      requestorIdIndex: {
+        keys: {
+          requestorId: 1,
+        },
+      },
+      uniqueFriendIndex: {
+        keys: {
+          requestorId: 1,
+          requesteeId: 1,
+        },
+        options: {
+          unique: true,
+        },
+      },
+      friendStatusIndex: {
+        keys: {
+          requestorId: 1,
+          requesteeId: 1,
+          status: 1,
+        },
+      },
+    },
+  },
 })
 export class Friend extends Entity {
   @property({
@@ -15,34 +44,72 @@ export class Friend extends Entity {
     id: true,
     generated: true,
     mongodb: {
-      dataType: 'ObjectId'
-    }
+      dataType: 'ObjectId',
+    },
   })
   id?: string;
 
   @property({
     type: 'string',
-    required: false,
-    default: 'pending'
+    required: true,
+    jsonSchema: {
+      enum: Object.values(FriendStatusType),
+    },
   })
-  status: string
+  status: FriendStatusType;
+
+  @property({
+    type: 'number',
+    required: false,
+  })
+  totalMutual?: number;
 
   @property({
     type: 'date',
-    required: false
+    required: false,
+    default: () => new Date(),
   })
-  createdAt?: string
+  createdAt?: string;
+
+  @property({
+    type: 'date',
+    required: false,
+    default: () => new Date(),
+  })
+  updatedAt?: string;
 
   @property({
     type: 'date',
     required: false,
   })
-  updatedAt?: string
+  deletedAt?: string;
 
-  @belongsTo(() => User)
-  friendId: string;
+  @belongsTo(
+    () => User,
+    {name: 'requestee'},
+    {
+      jsonSchema: {
+        maxLength: 66,
+        minLength: 66,
+        pattern: '^0x',
+      },
+      required: true,
+    },
+  )
+  requesteeId: string;
 
-  @belongsTo(() => User)
+  @belongsTo(
+    () => User,
+    {name: 'requestor'},
+    {
+      jsonSchema: {
+        maxLength: 66,
+        minLength: 66,
+        pattern: '^0x',
+      },
+      required: true,
+    },
+  )
   requestorId: string;
 
   constructor(data?: Partial<Friend>) {
@@ -52,6 +119,8 @@ export class Friend extends Entity {
 
 export interface FriendRelations {
   // describe navigational properties here
+  requestee?: UserWithRelations;
+  requestor?: UserWithRelations;
 }
 
 export type FriendWithRelations = Friend & FriendRelations;

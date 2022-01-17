@@ -1,4 +1,5 @@
-node_modules/
+.maintain/kubernetes
 dist/
-coverage/
+node_modules/
 .eslintrc.js
+*.tsbuildinfo

@@ -1,28 +1,21 @@
-import {belongsTo, Entity, hasMany, model, property, hasOne} from '@loopback/repository';
+import {
+  belongsTo,
+  Entity,
+  hasMany,
+  model,
+  property,
+} from '@loopback/repository';
+import {PlatformType, VisibilityType} from '../enums';
+import {Metric} from '../interfaces';
+import {Asset} from '../interfaces/asset.interface';
 import {Comment} from './comment.model';
-import {People} from './people.model';
+import {EmbeddedURL} from './embedded-url.model';
+import {Vote} from './vote.model';
+import {People, PeopleWithRelations} from './people.model';
+import {Transaction} from './transaction.model';
 import {User} from './user.model';
-import {Like} from './like.model';
-import {PublicMetric} from './public-metric.model';
-import {Dislike} from './dislike.model';
-
-interface PlatformUser {
-  username: string;
-  platform_account_id: string;
-  profile_image_url?: string;
-}
-
-interface PlatformPublicMetric {
-  retweet_count?: number,
-  like_count?: number,
-  upvote_count?: number,
-  downvote_count?: number
-}
-
-interface TipsReceived {
-  tokenId: string,
-  totalTips: number
-}
+import {MentionUser} from './mention-user.model';
+import {UserWithRelations} from './';
 
 @model({
   settings: {
@@ -30,8 +23,21 @@ interface TipsReceived {
     mongodb: {
       collection: 'posts',
     },
-    hiddenProperties: ['walletAddress','totalComment','totalLiked','totalDisliked']
-  }
+    indexes: {
+      postIndex: {
+        keys: {
+          visibility: 1,
+          createdBy: 1,
+        },
+      },
+      originPostIndex: {
+        keys: {
+          originPostId: 1,
+        },
+      },
+    },
+    hiddenProperties: ['popularCount'],
+  },
 })
 export class Post extends Entity {
   @property({
@@ -42,44 +48,37 @@ export class Post extends Entity {
       dataType: 'ObjectId',
     },
   })
-  id?: string;
+  id: string;
 
   @property({
     type: 'array',
     itemType: 'string',
     required: false,
-    default: []
+    default: [],
   })
   tags: string[];
 
   @property({
-    type: 'object',
-    required: false,
-  })
-  platformUser?: PlatformUser;
-
-  @property({
     type: 'string',
     required: false,
-    default: 'myriad'
+    jsonSchema: {
+      enum: Object.values(PlatformType),
+    },
   })
-  platform?: string
-
-  @property({
-    type: 'object',
-    required: false
-  })
-  platformPublicMetric?: PlatformPublicMetric 
+  platform?: PlatformType;
 
   @property({
     type: 'string',
-    required: false
+    required: false,
   })
-  title?: string
+  title?: string;
 
   @property({
     type: 'string',
-    required: false
+    required: false,
+    jsonSchema: {
+      minLength: 1,
+    },
   })
   text?: string;
 
@@ -87,64 +86,100 @@ export class Post extends Entity {
     type: 'string',
     required: false,
   })
-  textId?: string;
-
-  @property({
-    type: 'boolean',
-    required: false,
-    default: false
-  })
-  hasMedia: boolean
+  originPostId?: string;
 
   @property({
     type: 'string',
-    required: false
+    required: false,
   })
-  link?: string
+  url?: string;
+
+  @property({
+    type: 'object',
+    required: false,
+  })
+  asset?: Asset;
+
+  @property({
+    type: 'date',
+    required: false,
+    default: () => new Date(),
+  })
+  originCreatedAt?: string;
+
+  @property({
+    type: 'object',
+    default: {
+      upvotes: 0,
+      downvotes: 0,
+      discussions: 0,
+      debates: 0,
+      comments: 0,
+    },
+  })
+  metric: Metric;
+
+  @property({
+    type: 'object',
+    require: false,
+  })
+  embeddedURL?: EmbeddedURL;
+
+  @property({
+    type: 'boolean',
+    require: false,
+    default: false,
+  })
+  isNSFW?: boolean;
+
+  @property({
+    type: 'string',
+    require: false,
+  })
+  NSFWTag?: string;
+
+  @property({
+    type: 'string',
+    required: false,
+    default: VisibilityType.PUBLIC,
+    jsonSchema: {
+      enum: Object.values(VisibilityType),
+    },
+  })
+  visibility?: VisibilityType;
 
   @property({
     type: 'array',
-    itemType: 'string',
-    required: false
+    itemType: 'object',
+    required: false,
+    default: [],
   })
-  assets?: string[]
+  mentions: MentionUser[];
+
+  @property({
+    type: 'number',
+    required: false,
+    default: 0,
+  })
+  popularCount: number;
+
+  @property({
+    type: 'number',
+    required: false,
+  })
+  totalImporter?: number;
 
   @property({
     type: 'date',
     required: false,
-  })
-  platformCreatedAt: string
-
-  @property({
-    type: 'number',
-    required: false,
-    default: 0
-  })
-  totalComment?: number
-
-  @property({
-    type: 'number',
-    required: false,
-    default: 0
-  })
-  totalLiked?: number
-
-  @property({
-    type: 'number',
-    required: false,
-    default: 0
-  })
-  totalDisliked?: number
-
-  @property({
-    type: 'date',
-    required: false,
+    default: () => new Date(),
   })
   createdAt?: string;
 
   @property({
     type: 'date',
     required: false,
+    default: () => new Date(),
   })
   updatedAt?: string;
 
@@ -154,44 +189,34 @@ export class Post extends Entity {
   })
   deletedAt?: string;
 
-  @property({
-    type: 'array',
-    itemType: 'string',
-    required: false,
-    default: []
-  })
-  importBy: string[]
-
-  @property({
-    type: 'array',
-    itemType: 'object',
-    required: false,
-    default: [
-      {
-        tokenId: "MYR",
-        totalTips: 0
-      }
-    ]
-  })
-  tipsReceived: TipsReceived[]
-
-  @belongsTo(() => User, {name: 'user'})
-  walletAddress: string;
-
-  @hasMany(() => Comment)
-  comments: Comment[];
+  @belongsTo(
+    () => User,
+    {name: 'user'},
+    {
+      jsonSchema: {
+        maxLength: 66,
+        minLength: 66,
+        pattern: '^0x',
+      },
+      required: true,
+    },
+  )
+  createdBy: string;
 
   @belongsTo(() => People)
   peopleId: string;
 
-  @hasMany(() => Like)
-  likes: Like[];
+  @hasMany(() => Comment, {keyTo: 'referenceId'})
+  comments: Comment[];
 
-  @hasOne(() => PublicMetric)
-  publicMetric: PublicMetric;
+  @hasMany(() => Vote, {keyTo: 'referenceId'})
+  likes: Vote[];
 
-  @hasMany(() => Dislike)
-  dislikes: Dislike[];
+  @hasMany(() => Vote, {keyTo: 'referenceId'})
+  votes: Vote[];
+
+  @hasMany(() => Transaction, {keyTo: 'referenceId'})
+  transactions: Transaction[];
 
   constructor(data?: Partial<Post>) {
     super(data);
@@ -200,6 +225,8 @@ export class Post extends Entity {
 
 export interface PostRelations {
   // describe navigational properties here
+  people?: PeopleWithRelations;
+  user?: UserWithRelations;
 }
 
 export type PostWithRelations = Post & PostRelations;

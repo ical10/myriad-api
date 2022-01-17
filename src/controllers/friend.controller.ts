@@ -1,126 +1,60 @@
-import {service} from '@loopback/core';
+import {intercept} from '@loopback/core';
 import {
   Count,
   CountSchema,
   Filter,
   FilterExcludingWhere,
   repository,
-  Where
 } from '@loopback/repository';
 import {
   del,
   get,
   getModelSchemaRef,
-  HttpErrors,
   param,
   patch,
   post,
   requestBody,
-  response
+  response,
 } from '@loopback/rest';
-import {Friend} from '../models';
-import {FriendRepository} from '../repositories';
-import {NotificationService} from '../services';
+import {FriendStatusType} from '../enums';
+import {PaginationInterceptor} from '../interceptors';
+import {ValidateFriendRequestInterceptor} from '../interceptors/validate-friend-request.interceptor';
+import {Friend, User} from '../models';
+import {FriendRepository, UserRepository} from '../repositories';
+import {authenticate} from '@loopback/authentication';
 
+@authenticate('jwt')
 export class FriendController {
   constructor(
     @repository(FriendRepository)
-    public friendRepository: FriendRepository,
-    @service(NotificationService)
-    public notificationService: NotificationService,
-  ) { }
+    protected friendRepository: FriendRepository,
+    @repository(UserRepository)
+    protected userRepository: UserRepository,
+  ) {}
 
+  @intercept(ValidateFriendRequestInterceptor.BINDING_KEY)
   @post('/friends')
   @response(200, {
     description: 'Friend model instance',
     content: {'application/json': {schema: getModelSchemaRef(Friend)}},
   })
-  async create(
+  async add(
     @requestBody({
       content: {
         'application/json': {
           schema: getModelSchemaRef(Friend, {
             title: 'NewFriend',
-            exclude: ['id'],
+            exclude: ['id', 'totalMutual'],
           }),
         },
       },
     })
     friend: Omit<Friend, 'id'>,
   ): Promise<Friend> {
-    if (friend.requestorId === friend.friendId) {
-      throw new HttpErrors.UnprocessableEntity('Cannot add itself')
-    }
-
-    const requestStatus = [
-      "pending", "approved", "rejected"
-    ]
-
-    const foundStatus = requestStatus.find(req => req === friend.status);
-
-    if (!foundStatus) {
-      throw new HttpErrors.UnprocessableEntity("Available status: pending, approved, rejected")
-    }
-
-    const countFriend = await this.friendRepository.count({
-      friendId: friend.friendId,
-      requestorId: friend.requestorId,
-      status: 'pending'
-    })
-
-    if (countFriend.count) {
-      throw new HttpErrors.UnprocessableEntity("Please approved your pending request, before add new friend! Maximum pending request: 20")
-    }
-
-    const foundFriend = await this.friendRepository.findOne({
-      where: {
-        friendId: friend.friendId,
-        requestorId: friend.requestorId
-      }
-    })
-
-    if (foundFriend && foundFriend.status === 'rejected') {
-      this.friendRepository.updateById(foundFriend.id, {
-        status: "pending",
-        updatedAt: new Date().toString()
-      })
-
-      foundFriend.status = 'pending'
-      foundFriend.updatedAt = new Date().toString()
-
-      return foundFriend
-    } 
-    
-    if (foundFriend && foundFriend.status === 'approved') {
-      throw new HttpErrors.UnprocessableEntity('You already friend with this user')
-    } 
-    
-    if (foundFriend && foundFriend.status === 'pending'){
-      throw new HttpErrors.UnprocessableEntity('Please wait for this user to approved your request')
-    }
-
-    const result = await this.friendRepository.create(friend)
-
-    try {
-      await this.notificationService.sendFriendRequest(friend.requestorId, friend.friendId);
-    } catch (error) {
-      // ignored
-    }
-
-    return result
+    return this.friendRepository.create(friend);
   }
 
-  @get('/friends/count')
-  @response(200, {
-    description: 'Friend model count',
-    content: {'application/json': {schema: CountSchema}},
-  })
-  async count(
-    @param.where(Friend) where?: Where<Friend>,
-  ): Promise<Count> {
-    return this.friendRepository.count(where);
-  }
-
+  @intercept(PaginationInterceptor.BINDING_KEY)
   @get('/friends')
   @response(200, {
     description: 'Array of Friend model instances',
@@ -134,29 +68,11 @@ export class FriendController {
     },
   })
   async find(
-    @param.filter(Friend) filter?: Filter<Friend>,
+    @param.filter(Friend, {exclude: ['limit', 'skip', 'offset']})
+    filter?: Filter<Friend>,
   ): Promise<Friend[]> {
     return this.friendRepository.find(filter);
   }
-
-  // @patch('/friends')
-  // @response(200, {
-  //   description: 'Friend PATCH success count',
-  //   content: {'application/json': {schema: CountSchema}},
-  // })
-  // async updateAll(
-  //   @requestBody({
-  //     content: {
-  //       'application/json': {
-  //         schema: getModelSchemaRef(Friend, {partial: true}),
-  //       },
-  //     },
-  //   })
-  //   friend: Friend,
-  //   @param.where(Friend) where?: Where<Friend>,
-  // ): Promise<Count> {
-  //   return this.friendRepository.updateAll(friend, where);
-  // }
 
   @get('/friends/{id}')
   @response(200, {
@@ -169,11 +85,13 @@ export class FriendController {
   })
   async findById(
     @param.path.string('id') id: string,
-    @param.filter(Friend, {exclude: 'where'}) filter?: FilterExcludingWhere<Friend>
+    @param.filter(Friend, {exclude: 'where'})
+    filter?: FilterExcludingWhere<Friend>,
   ): Promise<Friend> {
     return this.friendRepository.findById(id, filter);
   }
 
+  @intercept(ValidateFriendRequestInterceptor.BINDING_KEY)
   @patch('/friends/{id}')
   @response(204, {
     description: 'Friend PATCH success',
@@ -183,33 +101,92 @@ export class FriendController {
     @requestBody({
       content: {
         'application/json': {
-          schema: getModelSchemaRef(Friend, {partial: true}),
+          schema: getModelSchemaRef(Friend, {
+            partial: true,
+            exclude: [
+              'id',
+              'createdAt',
+              'updatedAt',
+              'deletedAt',
+              'requesteeId',
+              'requestorId',
+              'totalMutual',
+            ],
+          }),
         },
       },
     })
-    friend: Friend,
+    friend: Partial<Friend>,
   ): Promise<void> {
-    if (friend.status === 'approved') {
-      try {
-        await this.notificationService.sendFriendAccept(friend.friendId, friend.requestorId);
-      } catch (error) {
-        // ignored
-      }
-    }
     await this.friendRepository.updateById(id, friend);
   }
 
-  // @put('/friends/{id}')
-  // @response(204, {
-  //   description: 'Friend PUT success',
-  // })
-  // async replaceById(
-  //   @param.path.string('id') id: string,
-  //   @requestBody() friend: Friend,
-  // ): Promise<void> {
-  //   await this.friendRepository.replaceById(id, friend);
-  // }
+  @get('/friends/{requestorId}/mutual/{requesteeId}')
+  @response(200, {
+    description: 'Count mutual friends',
+    content: {
+      'application/json': {
+        schema: CountSchema,
+      },
+    },
+  })
+  async mutualCount(
+    @param.path.string('requestorId') requestorId: string,
+    @param.path.string('requesteeId') requesteeId: string,
+  ): Promise<Count> {
+    /* eslint-disable  @typescript-eslint/no-explicit-any */
+    const collection = (
+      this.friendRepository.dataSource.connector as any
+    ).collection(Friend.modelName);
 
+    const countMutual = await collection
+      .aggregate([
+        {
+          $match: {
+            $or: [
+              {
+                requestorId: requestorId,
+                status: FriendStatusType.APPROVED,
+              },
+              {
+                requestorId: requesteeId,
+                status: FriendStatusType.APPROVED,
+              },
+            ],
+          },
+        },
+        {$group: {_id: '$requesteeId', count: {$sum: 1}}},
+        {$match: {count: 2}},
+        {$group: {_id: null, count: {$sum: 1}}},
+        {$project: {_id: 0}},
+      ])
+      .get();
+
+    if (countMutual.length === 0) return {count: 0};
+    return countMutual[0];
+  }
+
+  @intercept(PaginationInterceptor.BINDING_KEY)
+  @get('/friends/{requestorId}/detail/{requesteeId}')
+  @response(200, {
+    description: 'Array of Detail Mutual User model instances',
+    content: {
+      'application/json': {
+        schema: {
+          type: 'array',
+          items: getModelSchemaRef(User, {includeRelations: true}),
+        },
+      },
+    },
+  })
+  async mutualDetail(
+    @param.filter(User, {exclude: ['limit', 'skip', 'offset']})
+    filter?: Filter<User>,
+  ): Promise<User[]> {
+    return this.userRepository.find(filter);
+  }
+
+  @intercept(ValidateFriendRequestInterceptor.BINDING_KEY)
   @del('/friends/{id}')
   @response(204, {
     description: 'Friend DELETE success',

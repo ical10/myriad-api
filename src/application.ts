@@ -1,70 +1,59 @@
+import {AuthenticationComponent} from '@loopback/authentication';
 import {BootMixin} from '@loopback/boot';
 import {ApplicationConfig, createBindingFromClass} from '@loopback/core';
-import {CronComponent} from '@loopback/cron';
-import {RepositoryMixin, SchemaMigrationOptions} from '@loopback/repository';
+import {HealthComponent} from '@loopback/health';
+import {RepositoryMixin} from '@loopback/repository';
 import {RestApplication} from '@loopback/rest';
 import {
   RestExplorerBindings,
-  RestExplorerComponent
+  RestExplorerComponent,
 } from '@loopback/rest-explorer';
 import {ServiceMixin} from '@loopback/service-proxy';
-import {Keyring} from '@polkadot/api';
-import {mnemonicGenerate, encodeAddress} from '@polkadot/util-crypto';
-import {u8aToHex} from '@polkadot/util'
-import {KeypairType} from '@polkadot/util-crypto/types';
 import * as firebaseAdmin from 'firebase-admin';
+import {config} from './config';
 import path from 'path';
+import {JWTAuthenticationComponent} from './components';
 import {
-  FetchContentRedditJob,
-  FetchContentSocialMediaJob,
-  FetchContentTwitterJob,
-  UpdatePostsJob,
-  RemovedContentJob
+  CoinMarketCapDataSource,
+  RedditDataSource,
+  TwitterDataSource,
+} from './datasources';
+import {MyriadSequence} from './sequence';
+import {
+  CurrencyService,
+  ExperienceService,
+  FCMService,
+  FriendService,
+  MetricService,
+  NotificationService,
+  PostService,
+  SocialMediaService,
+  TagService,
+  TransactionService,
+  UserSocialMediaService,
+  ActivityLogService,
+  CoinMarketCapProvider,
+  RedditProvider,
+  TwitterProvider,
+} from './services';
+import {
+  UpdateExchangeRateJob,
+  UpdateTrendingTopicJob,
+  UpdatePeopleProfileJob,
 } from './jobs';
+import {CronComponent} from '@loopback/cron';
+import * as Sentry from '@sentry/node';
+import multer from 'multer';
+import {v4 as uuid} from 'uuid';
+import {FILE_UPLOAD_SERVICE} from './keys';
+import {FCSService} from './services/fcs.service';
 import {
-  CommentRepository,
-  ConversationRepository,
-  ExperienceRepository,
-  FriendRepository,
-  LikeRepository,
+  CurrencyRepository,
+  ExchangeRateRepository,
   PeopleRepository,
-  PostRepository,
-  PublicMetricRepository,
-  SavedExperienceRepository,
-  TagRepository,
-  TransactionRepository,
-  UserCredentialRepository,
-  UserRepository,
-  TokenRepository,
-  DetailTransactionRepository,
-  UserTokenRepository,
-  QueueRepository
 } from './repositories';
-import people from './seed-data/people.json';
-import posts from './seed-data/posts.json';
-import users from './seed-data/users.json';
-import tokens from './seed-data/tokens.json'
-import {polkadotApi} from './helpers/polkadotApi'
-import {MySequence} from './sequence';
-import {NotificationService} from './services';
-
-interface PlatformUser {
-  username: string,
-  platform_account_id?: string
-}
-
-interface Post {
-  tags?: string[],
-  platformUser: PlatformUser,
-  platform?: string,
-  text?: string,
-  textId?: string,
-  hasMedia?: boolean,
-  link?: string,
-  createdAt?: string,
-  peopleId?: string,
-  platformCreatedAt?: string
-}
+import {PlatformType} from './enums';
+import {People} from './models';
 
 export {ApplicationConfig};
 
@@ -74,34 +63,21 @@ export class MyriadApiApplication extends BootMixin(
   constructor(options: ApplicationConfig = {}) {
     super(options);
 
-    // Set up the custom sequence
-    this.sequence(MySequence);
-
     // Set up default home page
     this.static('/', path.join(__dirname, '../public'));
-
-    // Customize @loopback/rest-explorer configuration here
-    this.configure(RestExplorerBindings.COMPONENT).to({
-      path: '/explorer',
-    });
-    this.component(RestExplorerComponent);
-
-    // Add cron component
-    this.component(CronComponent);
-    this.add(createBindingFromClass(FetchContentSocialMediaJob))
-    this.add(createBindingFromClass(UpdatePostsJob))
-    this.add(createBindingFromClass(RemovedContentJob))
-
-
-    // Optional:
-    // this.add(createBindingFromClass(FetchContentTwitterJob))
-    // this.add(createBindingFromClass(FetchContentRedditJob))
-
-    // Add services
-    this.service(NotificationService)
+    // Set up the custom sequence
+    this.sequence(MyriadSequence);
+    this.configureFileUpload();
+    this.configureFirebase();
+    this.configureSentry();
+    // Register component
+    this.registerComponent();
+    // Register services
+    this.registerService();
+    // Register job
+    this.registerJob();
 
     this.projectRoot = __dirname;
-    // Customize @loopback/boot Booter Conventions here
     this.bootOptions = {
       controllers: {
         // Customize ControllerBooter Conventions here
@@ -110,250 +86,175 @@ export class MyriadApiApplication extends BootMixin(
         nested: true,
       },
     };
-
-    // initialize firebase app
-    firebaseAdmin.initializeApp()
   }
 
-  async migrateSchema(options?: SchemaMigrationOptions) {
-    await super.migrateSchema(options)
+  registerComponent() {
+    this.component(HealthComponent);
+    this.component(CronComponent);
+    this.component(AuthenticationComponent);
+    this.component(JWTAuthenticationComponent);
 
-    const tagRepo = await this.getRepository(TagRepository)
-    const postsRepo = await this.getRepository(PostRepository)
-    const peopleRepo = await this.getRepository(PeopleRepository)
-    const transactionRepo = await this.getRepository(TransactionRepository)
-    const userRepo = await this.getRepository(UserRepository)
-    const savedExperienceRepo = await this.getRepository(SavedExperienceRepository)
-    const experienceRepo = await this.getRepository(ExperienceRepository)
-    const userCredRepo = await this.getRepository(UserCredentialRepository)
-    const commentRepo = await this.getRepository(CommentRepository)
-    const publicMetricRepo = await this.getRepository(PublicMetricRepository)
-    const likeRepository = await this.getRepository(LikeRepository)
-    const conversationRepository = await this.getRepository(ConversationRepository)
-    const friendRepository = await this.getRepository(FriendRepository)
-    const tokenRepository = await this.getRepository(TokenRepository)
-    const detailTransactionRepository = await this.getRepository(DetailTransactionRepository)
-    const userTokenRepository = await this.getRepository(UserTokenRepository)
-    const queueRepository = await this.getRepository(QueueRepository)
+    this.configure(RestExplorerBindings.COMPONENT).to({
+      path: '/explorer',
+    });
+    this.component(RestExplorerComponent);
+  }
 
-    await likeRepository.deleteAll()
-    await conversationRepository.deleteAll()
-    await tagRepo.deleteAll()
-    await postsRepo.deleteAll()
-    await peopleRepo.deleteAll()
-    await transactionRepo.deleteAll()
-    await userRepo.deleteAll()
-    await savedExperienceRepo.deleteAll()
-    await experienceRepo.deleteAll()
-    await userCredRepo.deleteAll()
-    await commentRepo.deleteAll()
-    await publicMetricRepo.deleteAll()
-    await friendRepository.deleteAll()
-    await tokenRepository.deleteAll()
-    await userTokenRepository.deleteAll()
-    await detailTransactionRepository.deleteAll()
-    await queueRepository.deleteAll()
+  registerService() {
+    this.service(NotificationService);
+    this.service(FriendService);
+    this.service(UserSocialMediaService);
+    this.service(TransactionService);
+    this.service(SocialMediaService);
+    this.service(CurrencyService);
+    this.service(PostService);
+    this.service(TagService);
+    this.service(ExperienceService);
+    this.service(MetricService);
+    this.service(ActivityLogService);
 
-    const api = await polkadotApi(process.env.POLKADOT_MYRIAD_RPC || "")
+    // 3rd party service
+    this.service(FCMService);
+    this.service(FCSService);
+  }
 
-    const keyring = new Keyring({
-      type: process.env.POLKADOT_CRYPTO_TYPE as KeypairType
+  registerJob() {
+    this.add(createBindingFromClass(UpdateExchangeRateJob));
+    this.add(createBindingFromClass(UpdateTrendingTopicJob));
+    this.add(createBindingFromClass(UpdatePeopleProfileJob));
+  }
+
+  configureFileUpload() {
+    if (this.options.test) return;
+    const multerOptions: multer.Options = {
+      storage: multer.diskStorage({
+        filename: (req, file, cb) => {
+          cb(null, `${uuid()}${path.extname(file.originalname)}`);
+        },
+      }),
+    };
+    // Configure the file upload service with multer options
+    this.configure(FILE_UPLOAD_SERVICE).to(multerOptions);
+  }
+
+  configureFirebase() {
+    if (this.options.test) return;
+    firebaseAdmin.initializeApp({
+      storageBucket: config.FIREBASE_STORAGE_BUCKET,
+    });
+  }
+
+  configureSentry() {
+    if (this.options.test || !config.SENTRY_DSN) return;
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      tracesSampleRate: 1.0,
+    });
+  }
+
+  async initialPeopleProfile(): Promise<void> {
+    const peopleRepository = await this.getRepository(PeopleRepository);
+    const redditDataSource = new RedditDataSource();
+    const twitterDataSource = new TwitterDataSource();
+
+    const redditService = await new RedditProvider(redditDataSource).value();
+    const twitterService = await new TwitterProvider(twitterDataSource).value();
+
+    const people = await peopleRepository.find();
+
+    await Promise.all(
+      people.map(async person => {
+        const platform = person.platform;
+
+        if (platform === PlatformType.REDDIT) {
+          try {
+            const {data: user} = await redditService.getActions(
+              'user/' + person.username + '/about.json',
+            );
+
+            const updatedPeople = new People({
+              name: user.subreddit.title ? user.subreddit.title : user.name,
+              username: user.name,
+              originUserId: 't2_' + user.id,
+              profilePictureURL: user.icon_img.split('?')[0],
+            });
+
+            return await peopleRepository.updateById(person.id, updatedPeople);
+          } catch {
+            // ignore
+          }
+        }
+
+        if (platform === PlatformType.TWITTER) {
+          try {
+            const {user} = await twitterService.getActions(
+              `1.1/statuses/show.json?id=${person.originUserId}&include_entities=true&tweet_mode=extended`,
+            );
+
+            const updatedPeople = new People({
+              name: user.name,
+              username: user.screen_name,
+              originUserId: user.id_str,
+              profilePictureURL: user.profile_image_url_https || '',
+            });
+
+            return await peopleRepository.updateById(person.id, updatedPeople);
+          } catch {
+            // ignore
+          }
+        }
+      }),
+    );
+  }
+
+  async initialExchangeRates(): Promise<void> {
+    const currencyRepository = await this.getRepository(CurrencyRepository);
+    const exchangeRateRepository = await this.getRepository(
+      ExchangeRateRepository,
+    );
+
+    const dataSource = new CoinMarketCapDataSource();
+    const coinMarketCapService = await new CoinMarketCapProvider(
+      dataSource,
+    ).value();
+
+    const currencies = await currencyRepository.find({
+      where: {
+        exchangeRate: true,
+      },
     });
 
-    const updateUsers = users.map((user:any) => {
-      const seed = mnemonicGenerate()
-      const pair = keyring.createFromUri(seed + '', user)
+    const currencyIds = currencies.map(currency => currency.id);
 
-      return {
-        ...user,
-        id: u8aToHex(pair.publicKey),
-        seed_example: seed,
-        bio: `Hello, my name is ${user.name}`,
-        createdAt: new Date().toString(),
-        updatedAt: new Date().toString()
-      }
-    })
+    if (currencyIds.length === 0) return;
 
-    const newToken = await tokenRepository.createAll(tokens)
+    try {
+      const {data} = await coinMarketCapService.getActions(
+        `cryptocurrency/quotes/latest?symbol=${currencyIds.join(',')}`,
+      );
 
-    for (let i = 0; i < updateUsers.length; i++) {
-      const mnemonic = 'chalk cargo recipe ring loud deputy element hole moral soon lock credit';
-      const from = keyring.addFromMnemonic(mnemonic);
-      const value = 100000000000000;
-      const {nonce} = await api.query.system.account(encodeAddress(from.address, 214))
-
-      let count: number = nonce.toJSON()
-
-      const transfer = api.tx.balances.transfer(encodeAddress(updateUsers[i].id, 214), value)
-
-      const newUser = await userRepo.create(updateUsers[i])
-      const txHash = await transfer.signAndSend(from, {nonce: count + i});
-
-      await transactionRepo.create({
-        trxHash: txHash.toString(),
-        from: u8aToHex(from.publicKey),
-        to: updateUsers[i].id,
-        value: value,
-        state: 'success',
-        createdAt: new Date().toString(),
-        tokenId: 'MYR'
-      })
-
-      await userTokenRepository.create({
-        userId: newUser.id,
-        tokenId: "MYR"
-      })
-
-      await detailTransactionRepository.create({
-        sentToMe: 100000000000000,
-        sentToThem: 0,
-        userId: newUser.id,
-        tokenId: 'MYR'
-      })
-    }
-
-    const newPeople = await peopleRepo.createAll(people)
-
-    for (let i = 0; i < newPeople.length; i++) {
-      const person = newPeople[i]
-      const personAccountId = person.platform_account_id
-      const personUsername = person.username
-      const personPlatform = person.platform
-
-      for (let j = 0; j < posts.length; j++) {
-        const post: Post = posts[j]
-        const postAccountId = post.platformUser.platform_account_id
-        const postAccountUsername = post.platformUser.username
-
-        post.createdAt = new Date().toString()
-
-        if (personPlatform === 'twitter') {
-          if (personAccountId === postAccountId) {
-            post.peopleId = person.id
-          }
-        }
-
-        if (personPlatform === 'reddit') {
-          if (personAccountId === postAccountId) {
-            post.peopleId = person.id
-          }
-        }
-
-        if (personPlatform === 'facebook') {
-          if (personUsername === postAccountUsername) {
-            post.peopleId = person.id
-            post.platformCreatedAt = new Date().toString()
-          }
-        }
-      }
-    }
-
-    for (let i = 0; i < posts.length; i++) {
-      const {tags} = posts[i]
-      const post = await postsRepo.create(posts[i])
-      const newKey = keyring.addFromUri('//' + post.id)
-
-      await postsRepo.updateById(post.id, {
-        walletAddress: u8aToHex(newKey.publicKey),
-      })
-
-      await publicMetricRepo.create({
-        liked: 0,
-        comment: 0,
-        disliked: 0,
-        postId: post.id
-      })
-
-      for (let j = 0; j < tags.length; j++) {
-        const foundTag = await tagRepo.findOne({
+      for (const currencyId of currencyIds) {
+        const price = data[currencyId].quote.USD.price;
+        const found = await exchangeRateRepository.findOne({
           where: {
-            or: [
-              {
-                id: tags[j]
-              },
-              {
-                id: tags[j].toLowerCase()
-              },
-              {
-                id: tags[j].toUpperCase()
-              }
-            ],
-          }
-        })
+            id: currencyId,
+          },
+        });
 
-        if (!foundTag) {
-          await tagRepo.create({
-            id: tags[j],
-            count: 1,
-            createdAt: new Date().toString(),
-            updatedAt: new Date().toString()
-          })
-        } else {
-          const oneDay:number = 60 * 60 * 24 * 1000;
-          const isOneDay:boolean = new Date().getTime() - new Date(foundTag.updatedAt).getTime() > oneDay;
-
-          await tagRepo.updateById(foundTag.id, {
+        if (found) {
+          await exchangeRateRepository.updateById(currencyId, {
+            price: price,
             updatedAt: new Date().toString(),
-            count: isOneDay ? 1 : foundTag.count + 1
-          })
+          });
+        } else {
+          await exchangeRateRepository.create({
+            id: currencyId,
+            price: price,
+          });
         }
       }
+    } catch {
+      // ignore
     }
-
-    // Unccomment till this
-
-    // users.forEach(async user => {
-    //   const seed = mnemonicGenerate()
-    //   const pair = keyring.createFromUri(seed + '', user)
-
-    //   await userRepo.create({
-    //     ...user,
-    //     id: pair.address,
-    //     bio: `Hello, my name is ${user.name}`,
-    //     createdAt: new Date().toString(),
-    //     updatedAt: new Date().toString()
-    //   })
-  
-      // await userRepo.savedExperiences(newUser.id).create({
-      //   name: newUser.name + " Experience",
-      //   tags: [
-      //     {
-      //       id: 'cryptocurrency',
-      //       hide: false
-      //     },
-      //     {
-      //       id: 'blockchain',
-      //       hide: false
-      //     },
-      //     {
-      //       id: 'technology',
-      //       hide: false
-      //     }
-      //   ],
-      //   people: [
-      //     {
-      //       username: "gavofyork",
-      //       platform_account_id: "33962758",
-      //       platform: "twitter",
-      //       profile_image_url: "https://pbs.twimg.com/profile_images/981390758870683656/RxA_8cyN_400x400.jpg",
-      //       hide: false
-      //     },
-      //     {
-      //       username: "CryptoChief",
-      //       platform_account_id: "t2_e0t5q",
-      //       platform: "reddit",
-      //       profile_image_url: "https://www.redditstatic.com/avatars/avatar_default_15_DB0064.png",
-      //       hide: false
-      //     }
-      //   ],
-      //   description: `Hello, ${newUser.name}! Welcome to myriad!`,
-      //   userId: newUser.id,
-      //   createdAt: new Date().toString(),
-      //   updatedAt: new Date().toString()
-      // })
-    // })
-
-    await api.disconnect()
-
   }
 }
